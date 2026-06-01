@@ -122,19 +122,17 @@ class Bmp2TifApp:
             font=("Microsoft YaHei", 8), foreground="gray")
         pyramid_info.grid(row=3, column=0, columnspan=8, sticky=tk.W, padx=8)
         
-        # 线程数选项
-        thread_lab = ttk.Label(opt_frame, text="并行线程数:", font=("Microsoft YaHei", 9))
-        thread_lab.grid(row=2, column=5, sticky=tk.W, padx=(20, 5))
-        
-        self.thread_var = tk.IntVar(value=min(4, os.cpu_count() or 1))
-        thread_spin = ttk.Spinbox(opt_frame, from_=1, to=32, width=5,
-                                   textvariable=self.thread_var)
-        thread_spin.grid(row=2, column=6, sticky=tk.W, padx=5)
-        
-        cpu_count = os.cpu_count() or 1
-        thread_hint = ttk.Label(opt_frame, text=f"(CPU 核心数: {cpu_count})",
-                                font=("Microsoft YaHei", 8), foreground="gray")
-        thread_hint.grid(row=3, column=5, columnspan=3, sticky=tk.W, padx=(20, 0))
+        # 线程数变量（默认值，不在主界面显示）
+        self._cpu_count = os.cpu_count() or 1
+        self.thread_var = tk.IntVar(value=min(4, self._cpu_count))
+
+        # 菜单栏（设置菜单）
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="设置", menu=settings_menu)
+        settings_menu.add_command(label="⚙ 并行线程设置...", command=self._show_settings)
         
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
@@ -190,6 +188,57 @@ class Bmp2TifApp:
         if directory:
             self.output_var.set(directory)
             self._log(f"输出目录: {directory}")
+    
+    def _show_settings(self):
+        """显示设置对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("设置")
+        dialog.geometry("380x200")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # CPU 信息
+        info_text = f"当前系统 CPU 核心数: {self._cpu_count}"
+        ttk.Label(frame, text=info_text, font=("Microsoft YaHei", 10)).pack(anchor=tk.W, pady=(0, 15))
+
+        # 线程数设置
+        thread_frame = ttk.Frame(frame)
+        thread_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(thread_frame, text="并行线程数:", font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+
+        thread_var = tk.IntVar(value=self.thread_var.get())
+        spin = ttk.Spinbox(thread_frame, from_=1, to=self._cpu_count * 2, width=5,
+                            textvariable=thread_var)
+        spin.pack(side=tk.LEFT, padx=10)
+
+        ttk.Label(thread_frame, text=f"(1 ~ {self._cpu_count * 2})",
+                  font=("Microsoft YaHei", 9), foreground="gray").pack(side=tk.LEFT)
+
+        # 快捷按钮
+        quick_frame = ttk.Frame(frame)
+        quick_frame.pack(fill=tk.X, pady=(0, 15))
+
+        for label, val in [("自动", min(4, self._cpu_count)), ("半数", self._cpu_count // 2), ("全部", self._cpu_count)]:
+            ttk.Button(quick_frame, text=label, width=8,
+                       command=lambda v=val: thread_var.set(v)).pack(side=tk.LEFT, padx=3)
+
+        # 确定/取消
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+
+        def apply_settings():
+            val = max(1, thread_var.get())
+            self.thread_var.set(val)
+            self._log(f"并行线程数已设置为: {val}")
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="确定", command=apply_settings).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
     
     def _log(self, message, level="info"):
         """添加日志信息"""
