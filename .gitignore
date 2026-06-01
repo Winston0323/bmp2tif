@@ -7,6 +7,10 @@ build/
 dist/
 *.spec
 
+# Executables (use pyinstaller to build)
+*.exe
+
 # OS
 .DS_Store
 Thumbs.db
+
