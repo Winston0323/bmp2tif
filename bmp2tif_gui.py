@@ -148,6 +148,8 @@ class Bmp2TifApp:
         self.clear_btn = ttk.Button(btn_frame, text="清除日志", command=self._clear_log)
         self.clear_btn.pack(side=tk.LEFT, padx=(15, 0))
         
+        ttk.Button(btn_frame, text="⚙ 设置", command=self._show_settings).pack(side=tk.RIGHT)
+        
         # 进度条
         progress_frame = ttk.Frame(main_frame)
         progress_frame.pack(fill=tk.X, pady=(5, 10))
