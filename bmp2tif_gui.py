@@ -65,24 +65,50 @@ class Bmp2TifApp:
         ttk.Button(output_frame, text="浏览...", command=self._browse_output).pack(side=tk.RIGHT)
         ttk.Button(output_frame, text="清空", command=lambda: self.output_var.set("")).pack(side=tk.RIGHT, padx=(0, 5))
         
-        # 压缩选项框架
-        compress_frame = ttk.LabelFrame(main_frame, text="TIF 压缩方式", padding=10)
-        compress_frame.pack(fill=tk.X, pady=(0, 10))
+        # 压缩 + 字节序选项框架
+        opt_frame = ttk.LabelFrame(main_frame, text="TIF 输出选项", padding=10)
+        opt_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.compress_var = tk.StringVar(value="lzw")
+        self.byteorder_var = tk.StringVar(value="little")
         
-        # 压缩方式说明
+        # 左侧：压缩方式
+        compress_lab = ttk.Label(opt_frame, text="压缩方式:", font=("Microsoft YaHei", 9))
+        compress_lab.grid(row=0, column=0, sticky=tk.W, padx=5)
+        
         compress_options = [
-            ("lzw",    "LZW (无损, 兼容性好)"),
-            ("zip",    "ZIP / Deflate (无损, 压缩率较高)"),
-            ("jpeg",   "JPEG (有损, 文件最小, 适合照片)"),
-            ("none",   "不压缩 (文件最大, 质量不变)")
+            ("LZW",  "lzw"),
+            ("ZIP",  "zip"),
+            ("JPEG", "jpeg"),
+            ("无",   "none")
         ]
         
-        for i, (value, label) in enumerate(compress_options):
-            rb = ttk.Radiobutton(compress_frame, text=label, value=value,
+        for col, (label, val) in enumerate(compress_options):
+            rb = ttk.Radiobutton(opt_frame, text=label, value=val,
                                  variable=self.compress_var)
-            rb.grid(row=i // 2, column=i % 2, sticky=tk.W, padx=10, pady=2)
+            rb.grid(row=1, column=col, sticky=tk.W, padx=8, pady=2)
+        
+        # 分隔
+        ttk.Separator(opt_frame, orient=tk.VERTICAL).grid(row=0, column=4,
+                rowspan=3, sticky=tk.NS, padx=15)
+        
+        # 右侧：字节序
+        bo_lab = ttk.Label(opt_frame, text="字节序:", font=("Microsoft YaHei", 9))
+        bo_lab.grid(row=0, column=5, sticky=tk.W, padx=5)
+        
+        bo_info = ttk.Label(opt_frame, text="(TIFF 文件头标识)", font=("Microsoft YaHei", 8),
+                            foreground="gray")
+        bo_info.grid(row=0, column=6, sticky=tk.W)
+        
+        bo_options = [
+            ("Little-Endian\nII / RGBRGB (默认)", "little"),
+            ("Big-Endian\nMM / RRGGBB",         "big")
+        ]
+        
+        for col, (label, val) in enumerate(bo_options):
+            rb = ttk.Radiobutton(opt_frame, text=label, value=val,
+                                 variable=self.byteorder_var)
+            rb.grid(row=1, column=5+col, sticky=tk.W, padx=8, pady=2)
         
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
@@ -202,11 +228,14 @@ class Bmp2TifApp:
             total = len(bmp_files)
             compression = self.compress_var.get()
             comp_label = {"lzw": "LZW", "zip": "ZIP/Deflate", "jpeg": "JPEG", "none": "不压缩"}.get(compression, compression)
+            bo = self.byteorder_var.get()
+            bo_label = {"little": "Little-Endian (II/RGBRGB)", "big": "Big-Endian (MM/RRGGBB)"}.get(bo, bo)
             
             self.root.after(0, lambda: [
                 self._log(f"找到 {total} 个 BMP 文件"),
                 self._log(f"输出目录: {output_path}"),
-                self._log(f"压缩方式: {comp_label}")
+                self._log(f"压缩方式: {comp_label}"),
+                self._log(f"字节序: {bo_label}")
             ])
             
             os.makedirs(output_path, exist_ok=True)
@@ -226,7 +255,8 @@ class Bmp2TifApp:
                     img = Image.open(bmp_file)
                     output_file = output_path / (bmp_file.stem + ".tif")
                     comp = self.compress_var.get()
-                    save_kwargs = {"format": "TIFF"}
+                    bo = self.byteorder_var.get()
+                    save_kwargs = {"format": "TIFF", "byteorder": bo}
                     if comp != "none":
                         save_kwargs["compression"] = comp
                     img.save(output_file, **save_kwargs)
