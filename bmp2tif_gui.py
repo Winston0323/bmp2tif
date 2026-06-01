@@ -70,7 +70,7 @@ class Bmp2TifApp:
         opt_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.compress_var = tk.StringVar(value="lzw")
-        self.byteorder_var = tk.StringVar(value="little")
+        self.byteorder_var = tk.StringVar(value="interleaved")
         
         # 左侧：压缩方式
         compress_lab = ttk.Label(opt_frame, text="压缩方式:", font=("Microsoft YaHei", 9))
@@ -92,20 +92,20 @@ class Bmp2TifApp:
         ttk.Separator(opt_frame, orient=tk.VERTICAL).grid(row=0, column=4,
                 rowspan=3, sticky=tk.NS, padx=15)
         
-        # 右侧：字节序
-        bo_lab = ttk.Label(opt_frame, text="字节序:", font=("Microsoft YaHei", 9))
-        bo_lab.grid(row=0, column=5, sticky=tk.W, padx=5)
+        # 右侧：像素排列方式
+        px_lab = ttk.Label(opt_frame, text="像素排列:", font=("Microsoft YaHei", 9))
+        px_lab.grid(row=0, column=5, sticky=tk.W, padx=5)
         
-        bo_info = ttk.Label(opt_frame, text="(TIFF 文件头标识)", font=("Microsoft YaHei", 8),
+        px_info = ttk.Label(opt_frame, text="(Planar Configuration)", font=("Microsoft YaHei", 8),
                             foreground="gray")
-        bo_info.grid(row=0, column=6, sticky=tk.W)
+        px_info.grid(row=0, column=6, sticky=tk.W)
         
-        bo_options = [
-            ("Little-Endian\nII / RGBRGB (默认)", "little"),
-            ("Big-Endian\nMM / RRGGBB",         "big")
+        px_options = [
+            ("Interleaved\nRGBRGB (默认)", "interleaved"),
+            ("Per-Channel\nRRGGBB",         "perchannel")
         ]
         
-        for col, (label, val) in enumerate(bo_options):
+        for col, (label, val) in enumerate(px_options):
             rb = ttk.Radiobutton(opt_frame, text=label, value=val,
                                  variable=self.byteorder_var)
             rb.grid(row=1, column=5+col, sticky=tk.W, padx=8, pady=2)
@@ -229,7 +229,7 @@ class Bmp2TifApp:
             compression = self.compress_var.get()
             comp_label = {"lzw": "LZW", "zip": "ZIP/Deflate", "jpeg": "JPEG", "none": "不压缩"}.get(compression, compression)
             bo = self.byteorder_var.get()
-            bo_label = {"little": "Little-Endian (II/RGBRGB)", "big": "Big-Endian (MM/RRGGBB)"}.get(bo, bo)
+            bo_label = {"interleaved": "Interleaved (RGBRGB)", "perchannel": "Per-Channel (RRGGBB)"}.get(bo, bo)
             
             self.root.after(0, lambda: [
                 self._log(f"找到 {total} 个 BMP 文件"),
@@ -256,10 +256,20 @@ class Bmp2TifApp:
                     output_file = output_path / (bmp_file.stem + ".tif")
                     comp = self.compress_var.get()
                     bo = self.byteorder_var.get()
-                    save_kwargs = {"format": "TIFF", "byteorder": bo}
-                    if comp != "none":
-                        save_kwargs["compression"] = comp
-                    img.save(output_file, **save_kwargs)
+                    
+                    # Per-channel: 拆分通道按 RR GG BB 排列保存
+                    if bo == "perchannel" and img.mode == "RGB":
+                        from PIL.TiffImagePlugin import ImageFileDirectory_v2
+                        r, g, b = img.split()
+                        r.save(output_file, format="TIFF",
+                               compression=(None if comp == "none" else comp),
+                               save_all=True,
+                               append_images=[g, b])
+                    else:
+                        save_kwargs = {"format": "TIFF"}
+                        if comp != "none":
+                            save_kwargs["compression"] = comp
+                        img.save(output_file, **save_kwargs)
                     
                     success_count += 1
                     self.root.after(0, lambda idx=i+1, tot=total, name=bmp_file.name: (
