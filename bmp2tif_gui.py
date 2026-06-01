@@ -28,7 +28,7 @@ class Bmp2TifApp:
     def __init__(self, root):
         self.root = root
         self.root.title("BMP 转 TIF 批量转换工具")
-        self.root.geometry("680x580")
+        self.root.geometry("700x620")
         self.root.resizable(True, True)
         self._stop_flag = False
         
@@ -109,6 +109,17 @@ class Bmp2TifApp:
             rb = ttk.Radiobutton(opt_frame, text=label, value=val,
                                  variable=self.byteorder_var)
             rb.grid(row=1, column=5+col, sticky=tk.W, padx=8, pady=2)
+        
+        # 底部：图像金字塔选项
+        self.pyramid_var = tk.BooleanVar(value=False)
+        pyramid_cb = ttk.Checkbutton(opt_frame, text="保存图像金字塔 (Image Pyramid)",
+                                      variable=self.pyramid_var)
+        pyramid_cb.grid(row=2, column=0, columnspan=4, sticky=tk.W, padx=8, pady=(8, 2))
+        
+        pyramid_info = ttk.Label(opt_frame, 
+            text="在文件内嵌入多级分辨率缩略图，文件增大约 33%，适用于 GIS/医学影像/快速预览",
+            font=("Microsoft YaHei", 8), foreground="gray")
+        pyramid_info.grid(row=3, column=0, columnspan=8, sticky=tk.W, padx=8)
         
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
@@ -230,12 +241,15 @@ class Bmp2TifApp:
             comp_label = {"lzw": "LZW", "zip": "ZIP/Deflate", "jpeg": "JPEG", "none": "不压缩"}.get(compression, compression)
             bo = self.byteorder_var.get()
             bo_label = {"interleaved": "Interleaved (RGBRGB)", "perchannel": "Per-Channel (RRGGBB)"}.get(bo, bo)
+            pyramid = self.pyramid_var.get()
+            pyramid_label = "是" if pyramid else "否"
             
             self.root.after(0, lambda: [
                 self._log(f"找到 {total} 个 BMP 文件"),
                 self._log(f"输出目录: {output_path}"),
                 self._log(f"压缩方式: {comp_label}"),
-                self._log(f"字节序: {bo_label}")
+                self._log(f"像素排列: {bo_label}"),
+                self._log(f"图像金字塔: {pyramid_label}")
             ])
             
             os.makedirs(output_path, exist_ok=True)
@@ -256,20 +270,49 @@ class Bmp2TifApp:
                     output_file = output_path / (bmp_file.stem + ".tif")
                     comp = self.compress_var.get()
                     bo = self.byteorder_var.get()
+                    pyramid = self.pyramid_var.get()
+                    
+                    # 生成图像金字塔（多级缩略图）
+                    append_imgs = []
+                    if pyramid:
+                        current = img
+                        while min(current.size) >= 64:
+                            new_size = (current.size[0] // 2, current.size[1] // 2)
+                            if new_size[0] < 1 or new_size[1] < 1:
+                                break
+                            current = current.resize(new_size, Image.LANCZOS)
+                            append_imgs.append(current.copy())
+                    
+                    comp_val = None if comp == "none" else comp
                     
                     # Per-channel: 拆分通道按 RR GG BB 排列保存
                     if bo == "perchannel" and img.mode == "RGB":
-                        from PIL.TiffImagePlugin import ImageFileDirectory_v2
                         r, g, b = img.split()
-                        r.save(output_file, format="TIFF",
-                               compression=(None if comp == "none" else comp),
-                               save_all=True,
-                               append_images=[g, b])
+                        # 金字塔也需要拆分通道
+                        if pyramid and append_imgs:
+                            r_layers = [p.split()[0] for p in append_imgs if p.mode == "RGB"]
+                            g_layers = [p.split()[1] for p in append_imgs if p.mode == "RGB"]
+                            b_layers = [p.split()[2] for p in append_imgs if p.mode == "RGB"]
+                            r.save(output_file, format="TIFF",
+                                   compression=comp_val,
+                                   save_all=True,
+                                   append_images=r_layers + g_layers + b_layers + [g, b])
+                        else:
+                            r.save(output_file, format="TIFF",
+                                   compression=comp_val,
+                                   save_all=True,
+                                   append_images=[g, b])
                     else:
-                        save_kwargs = {"format": "TIFF"}
-                        if comp != "none":
-                            save_kwargs["compression"] = comp
-                        img.save(output_file, **save_kwargs)
+                        if pyramid and append_imgs:
+                            img.save(output_file, format="TIFF",
+                                     compression=comp_val,
+                                     save_all=True,
+                                     append_images=append_imgs)
+                        else:
+                            save_kwargs = {"format": "TIFF"}
+                            if comp != "none":
+                                save_kwargs["compression"] = comp
+                            img.save(output_file, **save_kwargs)
                     
                     success_count += 1
                     self.root.after(0, lambda idx=i+1, tot=total, name=bmp_file.name: (
