@@ -9,6 +9,7 @@ import sys
 import threading
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from PIL import Image
@@ -121,6 +122,20 @@ class Bmp2TifApp:
             font=("Microsoft YaHei", 8), foreground="gray")
         pyramid_info.grid(row=3, column=0, columnspan=8, sticky=tk.W, padx=8)
         
+        # 线程数选项
+        thread_lab = ttk.Label(opt_frame, text="并行线程数:", font=("Microsoft YaHei", 9))
+        thread_lab.grid(row=2, column=5, sticky=tk.W, padx=(20, 5))
+        
+        self.thread_var = tk.IntVar(value=min(4, os.cpu_count() or 1))
+        thread_spin = ttk.Spinbox(opt_frame, from_=1, to=32, width=5,
+                                   textvariable=self.thread_var)
+        thread_spin.grid(row=2, column=6, sticky=tk.W, padx=5)
+        
+        cpu_count = os.cpu_count() or 1
+        thread_hint = ttk.Label(opt_frame, text=f"(CPU 核心数: {cpu_count})",
+                                font=("Microsoft YaHei", 8), foreground="gray")
+        thread_hint.grid(row=3, column=5, columnspan=3, sticky=tk.W, padx=(20, 0))
+        
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=(5, 10))
@@ -206,17 +221,68 @@ class Bmp2TifApp:
     def _stop_convert(self):
         self._stop_flag = True
     
+    def _convert_single(self, bmp_file, output_path, comp, bo, pyramid, idx, total):
+        """转换单个 BMP 文件（在子线程中执行）"""
+        try:
+            img = Image.open(bmp_file)
+            output_file = output_path / (bmp_file.stem + ".tif")
+
+            # 生成图像金字塔（多级缩略图）
+            append_imgs = []
+            if pyramid:
+                current = img
+                while min(current.size) >= 64:
+                    new_size = (current.size[0] // 2, current.size[1] // 2)
+                    if new_size[0] < 1 or new_size[1] < 1:
+                        break
+                    current = current.resize(new_size, Image.LANCZOS)
+                    append_imgs.append(current.copy())
+
+            comp_val = None if comp == "none" else comp
+
+            # Per-channel: 拆分通道按 RR GG BB 排列保存
+            if bo == "perchannel" and img.mode == "RGB":
+                r, g, b = img.split()
+                if pyramid and append_imgs:
+                    r_layers = [p.split()[0] for p in append_imgs if p.mode == "RGB"]
+                    g_layers = [p.split()[1] for p in append_imgs if p.mode == "RGB"]
+                    b_layers = [p.split()[2] for p in append_imgs if p.mode == "RGB"]
+                    r.save(output_file, format="TIFF",
+                           compression=comp_val,
+                           save_all=True,
+                           append_images=r_layers + g_layers + b_layers + [g, b])
+                else:
+                    r.save(output_file, format="TIFF",
+                           compression=comp_val,
+                           save_all=True,
+                           append_images=[g, b])
+            else:
+                if pyramid and append_imgs:
+                    img.save(output_file, format="TIFF",
+                             compression=comp_val,
+                             save_all=True,
+                             append_images=append_imgs)
+                else:
+                    save_kwargs = {"format": "TIFF"}
+                    if comp != "none":
+                        save_kwargs["compression"] = comp
+                    img.save(output_file, **save_kwargs)
+
+            return (True, bmp_file.name, None)
+        except Exception as e:
+            return (False, bmp_file.name, str(e))
+
     def _run_convert(self):
-        """在后台线程中执行转换（内嵌逻辑）"""
+        """在后台线程中执行转换（多线程并行）"""
         input_dir = self.input_var.get().strip()
         output_dir = self.output_var.get().strip() or None
-        
+
         input_path = Path(input_dir).resolve()
         if output_dir:
             output_path = Path(output_dir).resolve()
         else:
             output_path = input_path
-        
+
         self.root.after(0, lambda: self._log("-" * 50))
         self.root.after(0, lambda: [
             self.convert_btn.config(state=tk.DISABLED),
@@ -224,18 +290,17 @@ class Bmp2TifApp:
             self.status_var.set("正在转换..."),
             self.progress.configure(value=0)
         ])
-        
+
         try:
-            # 查找所有 BMP 文件（Windows 不区分大小写，只需一个 glob）
             bmp_files = sorted(input_path.glob("*.bmp"))
-            
+
             if not bmp_files:
                 self.root.after(0, lambda: [
                     self._log("未找到任何 BMP 文件！", "error"),
                     self.status_var.set("无文件")
                 ])
                 return
-            
+
             total = len(bmp_files)
             compression = self.compress_var.get()
             comp_label = {"lzw": "LZW", "zip": "ZIP/Deflate", "jpeg": "JPEG", "none": "不压缩"}.get(compression, compression)
@@ -243,94 +308,64 @@ class Bmp2TifApp:
             bo_label = {"interleaved": "Interleaved (RGBRGB)", "perchannel": "Per-Channel (RRGGBB)"}.get(bo, bo)
             pyramid = self.pyramid_var.get()
             pyramid_label = "是" if pyramid else "否"
-            
+            max_workers = max(1, self.thread_var.get())
+
             self.root.after(0, lambda: [
                 self._log(f"找到 {total} 个 BMP 文件"),
                 self._log(f"输出目录: {output_path}"),
                 self._log(f"压缩方式: {comp_label}"),
                 self._log(f"像素排列: {bo_label}"),
-                self._log(f"图像金字塔: {pyramid_label}")
+                self._log(f"图像金字塔: {pyramid_label}"),
+                self._log(f"并行线程数: {max_workers}")
             ])
-            
+
             os.makedirs(output_path, exist_ok=True)
-            
+
             success_count = 0
             fail_count = 0
-            
-            for i, bmp_file in enumerate(bmp_files):
-                if self._stop_flag:
-                    self.root.after(0, lambda: [
-                        self._log("⚠ 用户停止了转换", "warning"),
-                        self.status_var.set("已停止")
-                    ])
-                    break
-                
-                try:
-                    img = Image.open(bmp_file)
-                    output_file = output_path / (bmp_file.stem + ".tif")
-                    comp = self.compress_var.get()
-                    bo = self.byteorder_var.get()
-                    pyramid = self.pyramid_var.get()
-                    
-                    # 生成图像金字塔（多级缩略图）
-                    append_imgs = []
-                    if pyramid:
-                        current = img
-                        while min(current.size) >= 64:
-                            new_size = (current.size[0] // 2, current.size[1] // 2)
-                            if new_size[0] < 1 or new_size[1] < 1:
-                                break
-                            current = current.resize(new_size, Image.LANCZOS)
-                            append_imgs.append(current.copy())
-                    
-                    comp_val = None if comp == "none" else comp
-                    
-                    # Per-channel: 拆分通道按 RR GG BB 排列保存
-                    if bo == "perchannel" and img.mode == "RGB":
-                        r, g, b = img.split()
-                        # 金字塔也需要拆分通道
-                        if pyramid and append_imgs:
-                            r_layers = [p.split()[0] for p in append_imgs if p.mode == "RGB"]
-                            g_layers = [p.split()[1] for p in append_imgs if p.mode == "RGB"]
-                            b_layers = [p.split()[2] for p in append_imgs if p.mode == "RGB"]
-                            r.save(output_file, format="TIFF",
-                                   compression=comp_val,
-                                   save_all=True,
-                                   append_images=r_layers + g_layers + b_layers + [g, b])
+            done_count = 0
+            lock = threading.Lock()
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for i, bmp_file in enumerate(bmp_files):
+                    if self._stop_flag:
+                        break
+                    future = executor.submit(
+                        self._convert_single,
+                        bmp_file, output_path, compression, bo, pyramid, i, total
+                    )
+                    futures[future] = (i, bmp_file)
+
+                for future in as_completed(futures):
+                    if self._stop_flag:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+
+                    idx, bmp_file = futures[future]
+                    ok, name, err = future.result()
+
+                    with lock:
+                        done_count += 1
+                        if ok:
+                            success_count += 1
+                            self.root.after(0, lambda d=done_count, t=total, n=name, s=success_count: (
+                                self._log(f"[{d}/{t}] ✓ {n}", "info"),
+                                self.progress_label.configure(text=f"进度: {d}/{t} ({s} 成功)"),
+                                self.progress.configure(value=(d / t) * 100)
+                            ))
                         else:
-                            r.save(output_file, format="TIFF",
-                                   compression=comp_val,
-                                   save_all=True,
-                                   append_images=[g, b])
-                    else:
-                        if pyramid and append_imgs:
-                            img.save(output_file, format="TIFF",
-                                     compression=comp_val,
-                                     save_all=True,
-                                     append_images=append_imgs)
-                        else:
-                            save_kwargs = {"format": "TIFF"}
-                            if comp != "none":
-                                save_kwargs["compression"] = comp
-                            img.save(output_file, **save_kwargs)
-                    
-                    success_count += 1
-                    self.root.after(0, lambda idx=i+1, tot=total, name=bmp_file.name: (
-                        self._log(f"[{idx}/{tot}] ✓ {name}", "info"),
-                        self.progress_label.configure(text=f"进度: {idx}/{tot} ({success_count} 成功)"),
-                        self.progress.configure(value=(idx/tot)*100)
-                    ))
-                    
-                except Exception as e:
-                    fail_count += 1
-                    self.root.after(0, lambda idx=i+1, name=bmp_file.name, err=str(e): (
-                        self._log(f"[{idx}] ✗ {name}: {err}", "error")
-                    ))
-                
-                # 小延迟避免 UI 卡顿
-                import time; time.sleep(0.01)
-            
-            if not self._stop_flag:
+                            fail_count += 1
+                            self.root.after(0, lambda d=done_count, n=name, e=err: (
+                                self._log(f"[{d}] ✗ {n}: {e}", "error"),
+                            ))
+
+            if self._stop_flag:
+                self.root.after(0, lambda: [
+                    self._log("⚠ 用户停止了转换", "warning"),
+                    self.status_var.set("已停止")
+                ])
+            else:
                 _s, _f = success_count, fail_count
                 self.root.after(0, lambda s=_s, f=_f: [
                     self._log("-" * 50),
@@ -340,7 +375,7 @@ class Bmp2TifApp:
                     self.status_var.set("转换完成"),
                     messagebox.showinfo("完成", f"转换完成！\n成功: {s}\n失败: {f}")
                 ] if s > 0 else None)
-                
+
         except Exception as e:
             self.root.after(0, lambda err=str(e): [
                 self._log(f"错误: {err}", "error"),
