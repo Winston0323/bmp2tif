@@ -1,7 +1,7 @@
-# 运行时生成的目录
-uploads/
-outputs/
-
-# Python 缓存
 __pycache__/
 *.pyc
+uploads/
+outputs/
+*.zip
+*.tif
+.env

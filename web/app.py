@@ -22,6 +22,9 @@ from PIL import Image
 
 app = FastAPI(title="BMP 转 TIF 批量转换工具")
 
+# Render 部署: 使用 PORT 环境变量; 本地开发默认 8001
+PORT = int(os.environ.get("PORT", 8001))
+
 # 任务存储
 tasks = {}
 tasks_lock = threading.Lock()
