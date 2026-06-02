@@ -1,16 +1,7 @@
-# Python
 __pycache__/
 *.pyc
-
-# PyInstaller build artifacts
-build/
-dist/
-*.spec
-
-# Executables (use pyinstaller to build)
-*.exe
-
-# OS
-.DS_Store
-Thumbs.db
-
+uploads/
+outputs/
+*.zip
+*.tif
+.env
