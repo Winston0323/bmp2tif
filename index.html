@@ -97,11 +97,18 @@
     .field-group input[type="range"] {
       flex: 1;
       min-width: 180px;
+      width: 100%;
       border-radius: 8px;
       border: 1px solid rgba(148, 163, 184, 0.3);
-      padding: 10px 12px;
       background: #0f1720;
       color: #e6e8eb;
+    }
+    .field-group select {
+      padding: 10px 12px;
+    }
+    .field-group input[type="range"] {
+      padding: 0;
+      margin: 0;
     }
     .field-group input[type="range"]:disabled {
       opacity: 0.65;
@@ -112,6 +119,64 @@
       min-width: 36px;
       text-align: center;
       color: #e2f8ff;
+    }
+    .field-note {
+      margin: 0 0 16px 132px;
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 560px;
+    }
+    .info-wrapper {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .info-button {
+      width: 34px;
+      height: 34px;
+      min-width: 34px;
+      min-height: 34px;
+      border-radius: 50%;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(15, 41, 55, 0.95);
+      color: #38bdf8;
+      font-weight: bold;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .info-button:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: #38bdf8;
+    }
+    .info-tooltip {
+      position: absolute;
+      top: 130%;
+      right: 0;
+      width: 260px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(15, 41, 55, 0.98);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      color: #e2f8ff;
+      font-size: 13px;
+      line-height: 1.55;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(6px);
+      transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+      z-index: 10;
+    }
+    .info-wrapper:hover .info-tooltip {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
     }
     .radio-group {
       display: flex;
@@ -242,9 +307,6 @@
 <body>
   <div class="page">
     <h1>BMP 转 TIFF 在线转换器</h1>
-    <div class="notice">
-      这是一个纯前端网页应用，无需后端。选择一个或多个 BMP 文件，页面会将它们转换为 TIFF，并打包成 ZIP 供下载。
-    </div>
 
     <div id="flash" class="flash" style="display:none"></div>
 
@@ -275,6 +337,23 @@
           </label>
         </div>
       </div>
+      <div class="field-group radio-group">
+        <span>像素排列</span>
+        <div class="compression-options">
+          <label class="radio-button">
+            <input type="radio" name="pixelOrder" value="INTERLEAVED" checked />
+            RGBRGB（Interleaved）
+          </label>
+          <label class="radio-button">
+            <input type="radio" name="pixelOrder" value="PERCHANNEL" />
+            RRR...GGG...BBB...（Per-channel）
+          </label>
+        </div>
+        <div class="info-wrapper">
+          <button type="button" class="info-button" aria-label="像素排列说明">i</button>
+          <div class="info-tooltip">像素排列决定像素存储顺序，对后续图像处理管线影响较大。Interleaved 适合标准显示与常见 RGB 图像，Per-channel 适合专业 TIFF 分通道处理或单通道后处理流程。</div>
+        </div>
+      </div>
       <div class="field-group" id="jpegQualityGroup">
         <label for="jpegQuality">JPEG 质量</label>
         <input id="jpegQuality" type="range" min="4" max="12" step="1" value="12" />
@@ -288,17 +367,17 @@
       <button id="convertBtn" type="button" disabled>开始转换</button>
     </div>
 
-    <div class="progress-container" style="display:none;">
-      <div class="progress-bar-wrapper">
-        <div id="progressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
-      </div>
-      <div id="progressText" class="progress-text">准备中...</div>
-    </div>
     <div class="progress-container" id="uploadProgressContainer" style="display:none;">
       <div class="progress-bar-wrapper">
         <div id="uploadProgressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
       </div>
       <div id="uploadProgressText" class="progress-text">等待上传...</div>
+    </div>
+    <div class="progress-container" id="progressContainer" style="display:none;">
+      <div class="progress-bar-wrapper">
+        <div id="progressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div id="progressText" class="progress-text">准备中...</div>
     </div>
 
     <ul id="fileList" class="file-list"></ul>
@@ -318,7 +397,7 @@
     const result = document.getElementById('result');
     const flash = document.getElementById('flash');
     const dropZone = document.getElementById('dropZone');
-    const progressContainer = document.querySelector('.progress-container');
+    const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
     const uploadProgressContainer = document.getElementById('uploadProgressContainer');
@@ -330,6 +409,11 @@
     function getCompressionMode() {
       const selected = document.querySelector('input[name="compressionMode"]:checked');
       return selected ? selected.value : 'NONE';
+    }
+
+    function getPixelOrder() {
+      const selected = document.querySelector('input[name="pixelOrder"]:checked');
+      return selected ? selected.value : 'INTERLEAVED';
     }
 
     function updateCompressionUI() {
@@ -429,6 +513,7 @@
       ctx.drawImage(bitmap, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const mode = getCompressionMode();
+      const pixelOrder = getPixelOrder();
       const quality = Number(jpegQuality.value);
       const metadata = {
         t305: ['BMP2TIFF Converter'],
@@ -450,7 +535,7 @@
       } else {
         metadata.t262 = [2];
         metadata.t258 = [8, 8, 8, 8];
-        metadata.t277 = [4];
+        metadata.t277 = pixelOrder === 'PERCHANNEL' ? [2] : [1];
         if (mode === 'LZW') metadata.t259 = [5];
         if (mode === 'ZIP') metadata.t259 = [8];
         if (mode === 'NONE') metadata.t259 = [1];
@@ -695,7 +780,7 @@ function compressLZW(rawBytes) {
 }
 
 self.onmessage = async function(event) {
-  const { file, mode, quality } = event.data;
+  const { file, mode, quality, pixelOrder } = event.data;
   try {
     const bitmap = await createImageBitmap(file);
     const width = bitmap.width;
@@ -724,7 +809,7 @@ self.onmessage = async function(event) {
     } else {
       metadata.t262 = [2];
       metadata.t258 = [8, 8, 8, 8];
-      metadata.t277 = [4];
+      metadata.t277 = pixelOrder === 'PERCHANNEL' ? [2] : [1];
       if (mode === 'LZW') metadata.t259 = [5];
       if (mode === 'ZIP') metadata.t259 = [8];
       if (mode === 'NONE') metadata.t259 = [1];
@@ -795,7 +880,7 @@ self.onmessage = async function(event) {
         };
 
         try {
-          worker.postMessage({ file, mode: getCompressionMode(), quality: Number(jpegQuality.value) });
+          worker.postMessage({ file, mode: getCompressionMode(), quality: Number(jpegQuality.value), pixelOrder: getPixelOrder() });
         } catch (error) {
           cleanup();
           resolve({ success: false, buffer: null, error: error.message || 'Worker postMessage 失败' });
