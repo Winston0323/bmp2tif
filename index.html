@@ -697,9 +697,11 @@
     const threadCountSlider = document.getElementById('threadCount');
     const threadCountValue = document.getElementById('threadCountValue');
     const hardwareThreads = navigator.hardwareConcurrency || 4;
-    threadCountSlider.max = hardwareThreads;
-    threadCountSlider.value = hardwareThreads;
-    threadCountValue.textContent = hardwareThreads;
+    const MAX_CONCURRENT_WORKERS = 4;
+    const defaultThreadCount = Math.min(hardwareThreads, MAX_CONCURRENT_WORKERS);
+    threadCountSlider.max = defaultThreadCount;
+    threadCountSlider.value = defaultThreadCount;
+    threadCountValue.textContent = defaultThreadCount;
     threadCountSlider.addEventListener('input', () => {
       threadCountValue.textContent = threadCountSlider.value;
     });
@@ -1004,6 +1006,7 @@ self.onmessage = async function(event) {
           zip.file(name, new Blob([res.buffer], { type: 'image/tiff' }));
           convertedCount += 1;
           reportLines.push(`✔ ${name}`);
+          res.buffer = null;
         } else {
           reportLines.push(`✖ ${file.name}: ${res.error}`);
         }
@@ -1015,7 +1018,7 @@ self.onmessage = async function(event) {
       } else {
         setProgress(0, '正在打包 ZIP...');
         setUploadProgress(100, '上传已完成，正在打包');
-        const zipBlob = await zip.generateAsync({ type: 'blob' }, metadata => {
+        const zipBlob = await zip.generateAsync({ type: 'blob', streamFiles: true }, metadata => {
           setProgress(metadata.percent, `打包中 ${Math.round(metadata.percent)}%`);
         });
         const url = URL.createObjectURL(zipBlob);
