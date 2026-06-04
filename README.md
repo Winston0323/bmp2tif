@@ -1,61 +1,19 @@
-# BMP 转 TIF 批量转换工具 - Web 版
+# BMP to TIFF 在线转换器
 
-基于 FastAPI 的 BMP → TIF 批量转换工具，支持浏览器上传、实时进度跟踪、自动下载。
+这是一个纯前端静态网页应用。你可以直接打开 `index.html`，无需后端服务。
 
-## 功能特性
+## 使用方法
 
-- 批量上传 BMP 文件并转换为 TIF 格式
-- 支持压缩方式：LZW / ZIP / JPEG / 无压缩
-- 支持像素排列：Interleaved (RGBRGB) / Per-Channel (RRGGBB)
-- 可选图像金字塔（Image Pyramid）
-- 多线程并行转换，自动使用最大 CPU 核心数
-- 五阶段实时进度：上传 → 读取 → 转换 → 打包 → 下载
-- 支持文件夹上传（保留子目录结构）
+1. 直接打开 `index.html`：
+   - 在浏览器中打开文件，或使用本地静态服务器
+2. 拖拽 BMP 文件到页面中，或点击区域选择 BMP 文件
+3. 选择压缩模式：NONE / LZW / ZIP / JPEG
+4. 若选择 JPEG，可设置质量值 4-12（12 最好）
+5. 选择线程数，默认使用浏览器 CPU 核心数最大值
+6. 点击“开始转换”，下载生成的 `converted_tifs.zip`
 
-## 环境要求
+## 注意
 
-- Python 3.8+
-- 依赖库见 `requirements.txt`
-
-## 安装步骤
-
-```bash
-cd web
-pip install -r requirements.txt
-```
-
-## 启动服务器
-
-```bash
-cd web
-python -m uvicorn app:app --host 127.0.0.1 --port 8001
-```
-
-启动后在浏览器中访问：**http://localhost:8001**
-
-> ⚠️ 不要使用 `0.0.0.0` 作为浏览器地址，请使用 `localhost` 或 `127.0.0.1`。
-
-如需局域网内其他设备访问，启动时使用 `--host 0.0.0.0`，但浏览器地址栏仍输入服务器的实际 IP（如 `http://192.168.1.100:8001`）。
-
-## 项目结构
-
-```
-web/
-├── app.py              # FastAPI 后端主程序
-├── requirements.txt    # Python 依赖
-├── README.md           # 本文件
-├── static/
-│   └── index.html      # 前端页面
-├── uploads/            # 上传临时目录（自动创建，运行时生成）
-└── outputs/            # 转换输出目录（自动创建，运行时生成）
-```
-
-## API 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/convert` | 上传 BMP 文件并启动转换 |
-| GET  | `/api/task/{task_id}` | 查询任务状态与进度 |
-| GET  | `/api/download/{task_id}` | 下载转换结果 ZIP |
-| GET  | `/api/download/{task_id}/{filename}` | 下载单个 TIF 文件 |
-| GET  | `/api/cpu` | 获取 CPU 核心数 |
+- 该页面会在浏览器内将 BMP 转为 TIFF
+- 使用了 `JSZip` 生成 ZIP 包
+- 使用了 `UTIF.js` 进行 TIFF 编码
