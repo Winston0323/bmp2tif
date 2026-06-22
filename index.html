@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BMP 转 TIFF 在线转换器</title>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/utif@3.0.0/UTIF.min.js"></script>
   <style>
@@ -384,7 +384,7 @@
 
     <div id="result" class="result"></div>
 
-    <footer>支持 BMP 格式文件，转换后会生成 TIFF 文件并打包为 ZIP。</footer>
+    <footer>支持 BMP 格式文件，转换后会生成 TIFF 文件并打包为 ZIP。大文件量场景下自动流式写入磁盘，避免内存溢出。</footer>
   </div>
 
   <script>
@@ -912,12 +912,11 @@ self.onmessage = async function(event) {
       return results;
     }
 
-    async function convertFilesInParallel(files) {
+    async function convertFilesInParallel(files, onFileComplete) {
       const total = files.length;
       const threadCount = Math.min(Number(threadCountSlider.value), total);
       let nextIndex = 0;
       let completed = 0;
-      const results = new Array(total);
       let activeCount = 0;
 
       return new Promise(resolve => {
@@ -929,13 +928,12 @@ self.onmessage = async function(event) {
             processFileWithWorker(file).then(result => {
               completed += 1;
               activeCount -= 1;
-              results[index] = result;
               const percent = Math.round((completed / total) * 100);
-              setProgress(percent, `转换中 ${completed}/${total}: ${file.name}`);
-              setUploadProgress(percent, `上传进度 ${completed}/${total}`);
+              setUploadProgress(percent, `转换进度 ${completed}/${total}`);
+              if (onFileComplete) onFileComplete(index, result);
               startNext();
               if (completed === total) {
-                resolve(results);
+                resolve();
               }
             });
           }
@@ -980,47 +978,173 @@ self.onmessage = async function(event) {
       clearMessage();
       result.innerHTML = '';
       resetProgress();
-      const threadCount = Math.min(Number(threadCountSlider.value), files.length);
-      setProgress(0, `准备转换 ${files.length} 个文件，使用 ${threadCount} 线程...`);
-      setUploadProgress(0, '准备上传...');
+      const total = files.length;
+      const threadCount = Math.min(Number(threadCountSlider.value), total);
+      setProgress(0, `准备转换 ${total} 个文件，使用 ${threadCount} 线程...`);
+      setUploadProgress(0, '准备转换...');
 
-      const zip = new JSZip();
-      let convertedCount = 0;
-      const reportLines = [];
-      let conversionResults;
+      /* ---- 尝试 File System Access API 直接写入磁盘 ---- */
+      let useFileSystemAPI = false;
+      let writableStream = null;
 
-      try {
-        conversionResults = await convertFilesInParallel(files);
-        if (conversionResults.every(res => !res.success)) {
-          throw new Error('所有线程转换失败');
+      if (typeof window.showSaveFilePicker === 'function') {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: 'converted_tifs.zip',
+            types: [{ description: 'ZIP 文件', accept: { 'application/zip': ['.zip'] } }]
+          });
+          writableStream = await handle.createWritable();
+          useFileSystemAPI = true;
+        } catch (e) {
+          if (e.name === 'AbortError') {
+            convertBtn.disabled = false;
+            fileInput.disabled = false;
+            return;
+          }
         }
-      } catch (error) {
-        showMessage(`多线程转换失败，回退到单线程：${error.message}`, true);
-        conversionResults = await convertFilesInMainThread(files);
       }
 
-      conversionResults.forEach((res, index) => {
-        const file = files[index];
-        const name = file.name.replace(/\.bmp$/i, '.tif');
-        if (res.success) {
-          zip.file(name, new Blob([res.buffer], { type: 'image/tiff' }));
-          convertedCount += 1;
-          reportLines.push(`✔ ${name}`);
-          res.buffer = null;
-        } else {
-          reportLines.push(`✖ ${file.name}: ${res.error}`);
-        }
-      });
+      /* ---- fflate 流式 ZIP ---- */
+      const zip = new fflate.Zip();
+      const chunks = [];
+      let zipDoneResolve;
+      const zipDone = new Promise(resolve => { zipDoneResolve = resolve; });
 
+      zip.ondata = (err, data, final) => {
+        if (err) {
+          if (useFileSystemAPI && writableStream) try { writableStream.abort(); } catch (_) {}
+          throw err;
+        }
+        if (useFileSystemAPI) {
+          writableStream.write(data);
+        } else {
+          chunks.push(data);
+        }
+        if (final) {
+          (useFileSystemAPI ? writableStream.close() : Promise.resolve()).then(zipDoneResolve);
+        }
+      };
+
+      /* ---- 逐个添加到 ZIP（保持文件顺序） ---- */
+      let nextToAdd = 0;
+      const completedMap = new Map();
+      let convertedCount = 0;
+      const reportLines = [];
+      let allConverted = false;
+
+      function drainZipQueue() {
+        while (completedMap.has(nextToAdd)) {
+          const item = completedMap.get(nextToAdd);
+          completedMap.delete(nextToAdd);
+
+          if (item.success) {
+            try {
+              const entry = new fflate.ZipDeflate(item.name, { level: 6 });
+              zip.add(entry);
+              entry.push(new Uint8Array(item.buffer), true);
+              convertedCount++;
+              reportLines.push(`✔ ${item.name}`);
+            } catch (e) {
+              reportLines.push(`✖ ${item.name}: 打包失败`);
+            }
+            item.buffer = null;
+          } else {
+            reportLines.push(item.error);
+          }
+
+          nextToAdd++;
+          const pct = total > 0 ? Math.round((nextToAdd / total) * 100) : 100;
+          setProgress(pct, `打包中 ${nextToAdd}/${total}`);
+        }
+
+        if (allConverted && nextToAdd === total) {
+          if (convertedCount > 0) {
+            zip.end();
+          } else {
+            zipDoneResolve();
+          }
+        }
+      }
+
+      /* ---- Worker 并行转换，每完成一个立即入队 ---- */
+      let workerAllFailed = true;
+
+      function onFileComplete(index, result) {
+        if (result.success) workerAllFailed = false;
+        if (result.success) {
+          const name = files[index].name.replace(/\.bmp$/i, '.tif');
+          completedMap.set(index, { success: true, buffer: result.buffer, name });
+        } else {
+          completedMap.set(index, { success: false, error: `✖ ${files[index].name}: ${result.error}` });
+        }
+        drainZipQueue();
+      }
+
+      await convertFilesInParallel(files, onFileComplete);
+      allConverted = true;
+      drainZipQueue();
+
+      /* ---- 所有 Worker 失败时回退主线程 ---- */
+      if (workerAllFailed) {
+        showMessage('多线程转换失败，回退到单线程', true);
+        if (useFileSystemAPI && writableStream) {
+          try { writableStream.abort(); } catch (_) {}
+          useFileSystemAPI = false;
+        }
+        nextToAdd = 0;
+        completedMap.clear();
+        convertedCount = 0;
+        reportLines.length = 0;
+        allConverted = false;
+        chunks.length = 0;
+
+        const fbZip = new fflate.Zip();
+        const fbChunks = [];
+        let fbDoneResolve;
+        const fbDone = new Promise(r => { fbDoneResolve = r; });
+        fbZip.ondata = (err, data, final) => {
+          if (err) throw err;
+          fbChunks.push(data);
+          if (final) fbDoneResolve();
+        };
+
+        for (let i = 0; i < total; i++) {
+          const file = files[i];
+          const percent = Math.round(((i + 1) / total) * 100);
+          setProgress(percent, `主线程转换 ${i + 1}/${total}: ${file.name}`);
+          setUploadProgress(percent, `转换进度 ${i + 1}/${total}`);
+          try {
+            const tifBlob = await createTiffBlob(file);
+            const buffer = await tifBlob.arrayBuffer();
+            const name = file.name.replace(/\.bmp$/i, '.tif');
+            const entry = new fflate.ZipDeflate(name, { level: 6 });
+            fbZip.add(entry);
+            entry.push(new Uint8Array(buffer), true);
+            convertedCount++;
+            reportLines.push(`✔ ${name}`);
+          } catch (error) {
+            reportLines.push(`✖ ${file.name}: ${error.message || '主线程转换失败'}`);
+          }
+        }
+
+        if (convertedCount > 0) {
+          fbZip.end();
+          await fbDone;
+          chunks.push(...fbChunks);
+        }
+      } else {
+        await zipDone;
+      }
+
+      /* ---- 显示结果 ---- */
       if (convertedCount === 0) {
         result.innerHTML = '<p>没有成功转换的文件，请确认 BMP 文件是否有效。</p>';
         resetProgress();
+      } else if (useFileSystemAPI) {
+        result.innerHTML = `<p>已成功转换 ${convertedCount} 个文件并保存到本地。</p>`;
+        setProgress(100, '完成，文件已保存。');
       } else {
-        setProgress(0, '正在打包 ZIP...');
-        setUploadProgress(100, '上传已完成，正在打包');
-        const zipBlob = await zip.generateAsync({ type: 'blob', streamFiles: true }, metadata => {
-          setProgress(metadata.percent, `打包中 ${Math.round(metadata.percent)}%`);
-        });
+        const zipBlob = new Blob(chunks, { type: 'application/zip' });
         const url = URL.createObjectURL(zipBlob);
         result.innerHTML = `
           <p>已成功转换 ${convertedCount} 个文件。</p>
