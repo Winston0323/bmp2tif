@@ -58,15 +58,35 @@
     .progress-info { font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; }
     .file-list { margin-top: 10px; }
     .file-row {
-      display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+      display: block; padding: 10px 14px;
       margin-bottom: 6px; border-radius: 10px; background: rgba(255,255,255,0.03);
       border: 1px solid rgba(148,163,184,0.1); font-size: 13px;
     }
+    .file-top { display: flex; align-items: center; gap: 10px; }
     .file-row .name { flex: 1; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-row .size { color: #64748b; }
-    .file-row .status { min-width: 60px; text-align: right; }
+    .file-row .status { min-width: 60px; text-align: right; font-size:12px; }
     .status-ok { color: #4ade80; }
     .status-err { color: #f87171; }
+    .file-mini-bar {
+      height: 4px; border-radius: 2px; margin-top: 6px; background: rgba(255,255,255,0.06);
+      overflow: hidden; display: none;
+    }
+    .file-mini-bar .fill {
+      height: 100%; border-radius: 2px; width: 0%; transition: width .4s;
+      background: linear-gradient(90deg, #38bdf8, #22d3ee);
+    }
+    .file-mini-bar .fill.done { background: #4ade80; }
+    .file-mini-bar .fill.error { background: #f87171; width: 100%; }
+    .file-mini-bar .fill.running {
+      width: 100%; animation: pulse 1.5s ease-in-out infinite;
+      background: linear-gradient(90deg, #38bdf8 30%, #818cf8 50%, #38bdf8 70%);
+      background-size: 200% 100%;
+    }
+    @keyframes pulse {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
     .result { margin-top: 16px; }
     .result a { color: #7dd3fc; text-decoration: none; }
     .result a:hover { text-decoration: underline; }
@@ -204,10 +224,14 @@
       btnConvert.disabled = false;
       const totalSize = files.reduce((s, f) => s + f.size, 0);
       fileListEl.innerHTML = files.map((f, i) =>
-        `<div class="file-row">
-          <span class="name">📄 ${f.name}</span>
-          <span class="size">${fmtSize(f.size)}</span>
-          <span style="color:#f87171;cursor:pointer;padding:0 8px;" onclick="removeFile(${i})">✕</span>
+        `<div class="file-row" id="filerow-${i}">
+          <div class="file-top">
+            <span class="name">📄 ${f.name}</span>
+            <span class="size">${fmtSize(f.size)}</span>
+            <span class="status" id="filestatus-${i}"></span>
+            <span style="color:#f87171;cursor:pointer;padding:0 8px;" onclick="removeFile(${i})">✕</span>
+          </div>
+          <div class="file-mini-bar" id="filebar-${i}"><div class="fill" id="filefill-${i}"></div></div>
         </div>`
       ).join('');
       fileListEl.innerHTML += `<div style="font-size:12px;color:#64748b;margin-top:6px">${files.length} 个文件, ${fmtSize(totalSize)}</div>`;
@@ -445,18 +469,26 @@
 
       // Track per-file progress
       const results = new Array(total).fill(null);
-      const fileEls = new Array(total);
-      fileListEl.querySelectorAll('.file-row').forEach((el, i) => {
-        if (i < total) fileEls[i] = el.querySelector('.status') || el.appendChild(document.createElement('span'));
-      });
 
       function updateStatus(i, text, cls) {
-        const row = fileListEl.querySelectorAll('.file-row')[i];
-        if (row) {
-          let st = row.querySelector('.status');
-          if (!st) { st = document.createElement('span'); st.className = 'status'; row.appendChild(st); }
-          st.textContent = text;
-          st.className = 'status ' + (cls || '');
+        const st = document.getElementById('filestatus-' + i);
+        const bar = document.getElementById('filebar-' + i);
+        const fill = document.getElementById('filefill-' + i);
+        if (st) { st.textContent = text; st.className = 'status ' + (cls || ''); }
+        if (bar && fill) {
+          if (cls === 'status-ok') {
+            bar.style.display = 'block';
+            fill.className = 'fill done';
+            fill.style.width = '100%';
+          } else if (cls === 'status-err') {
+            bar.style.display = 'block';
+            fill.className = 'fill error';
+          } else if (text && cls !== 'status-ok' && cls !== 'status-err') {
+            // Running state (解码中..., 编码中..., etc)
+            bar.style.display = 'block';
+            fill.className = 'fill running';
+            fill.style.width = '100%';
+          }
         }
       }
 
