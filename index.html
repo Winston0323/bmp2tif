@@ -260,7 +260,8 @@
 
       // TIFF header
       const dataOff = 8 + 2 + 12 * 12 + 4; // header + count + 12 tags * 12 + nextIfd
-      const buf = new Uint8Array(dataOff + imageData.byteLength);
+      const overflowSize = 8 + 8 + 8; // BPS(4×SHORT) + XRes(RATIONAL) + YRes(RATIONAL)
+      const buf = new Uint8Array(dataOff + imageData.byteLength + overflowSize);
       // Byte order: "II"
       buf[0] = 0x49; buf[1] = 0x49;
       // Magic: 42
@@ -477,9 +478,9 @@
             const timeout = setTimeout(() => {
               worker.terminate();
               updateStatus(i, '超时', 'status-err');
-              results[i] = { error: '超时' };
+              results[i] = { error: '解码超时' };
               onDone(i);
-            }, 30000);
+            }, 120000);
 
             worker.onmessage = (e) => {
               clearTimeout(timeout);
@@ -488,9 +489,13 @@
               if (d.error) {
                 updateStatus(i, '失败', 'status-err');
                 results[i] = { error: d.error };
-              } else {
-                updateStatus(i, '编码中...', '');
-                // Build TIF in main thread (fast)
+                onDone(i);
+                return;
+              }
+              updateStatus(i, '编码中...', '');
+              // Build TIF asynchronously to avoid blocking event loop
+              // (prevents other workers from timing out while main thread is busy)
+              setTimeout(() => {
                 try {
                   const rgba = new Uint8Array(d.rgba);
                   let tifBuf;
@@ -506,8 +511,8 @@
                   updateStatus(i, '编码失败', 'status-err');
                   results[i] = { error: err.message };
                 }
-              }
-              onDone(i);
+                onDone(i);
+              }, 0);
             };
             worker.onerror = () => {
               clearTimeout(timeout);
@@ -642,7 +647,7 @@
       // TIFF with JPEG compression (tag 7) uses the JPEG interchange format
 
       const dataOff = 8 + 2 + 13 * 12 + 4;
-      const buf = new Uint8Array(dataOff + jpegData.length + 16); // extra for overflow
+      const buf = new Uint8Array(dataOff + jpegData.length + 24); // overflow: BPS(3×SHORT=6) + XRes(8) + YRes(8)
 
       buf[0] = 0x49; buf[1] = 0x49;
       tifPutLE(buf, 2, 42, 2);
