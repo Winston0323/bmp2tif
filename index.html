@@ -422,8 +422,6 @@
       if (onProgress) onProgress(0.95);
       const out = [];
       let buf = 0, bits = 0;
-      const out = [];
-      let buf = 0, bits = 0;
       for (const code of codes) {
         buf |= code << bits;
         bits += 12;
