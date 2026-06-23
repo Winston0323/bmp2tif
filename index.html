@@ -5,1161 +5,717 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BMP 转 TIFF 在线转换器</title>
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/utif@3.0.0/UTIF.min.js"></script>
   <style>
-    :root {
-      color-scheme: dark;
-      color: #e6e8eb;
-      background: #0f1720;
-      accent-color: #38bdf8;
-    }
+    :root { color-scheme: dark; accent-color: #38bdf8; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: Arial, sans-serif;
-      background: #08101a;
-      color: #e6e8eb;
-      margin: 0;
+      font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
+      background: #08101a; color: #e6e8eb; min-height: 100vh;
     }
     .page {
-      max-width: 760px;
-      margin: 40px auto;
-      padding: 24px;
-      background: #112131;
-      border-radius: 16px;
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      max-width: 760px; margin: 20px auto; padding: 24px;
+      background: #112131; border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.06);
     }
-    h1 {
-      margin-top: 0;
-      font-size: 30px;
-      color: #ffffff;
-    }
-    p {
-      line-height: 1.7;
-      color: #cbd5e1;
-    }
-    .notice {
-      padding: 16px 18px;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid rgba(56, 189, 248, 0.24);
-      border-radius: 14px;
-      margin-bottom: 24px;
-      color: #e2f8ff;
-    }
-    .flash {
-      margin-bottom: 16px;
-      padding: 14px 16px;
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      color: #f8fafc;
-    }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 20px;
-    }
-    input[type=file] {
-      display: none;
-    }
+    h1 { font-size: 28px; color: #fff; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #64748b; margin-bottom: 20px; }
     .drop-zone {
-      padding: 28px 20px;
-      border: 2px dashed rgba(56, 189, 248, 0.6);
-      border-radius: 16px;
-      text-align: center;
-      color: #cbd5e1;
-      background: rgba(15, 41, 55, 0.9);
-      margin-bottom: 18px;
-      transition: background 0.2s, border-color 0.2s, color 0.2s;
-      cursor: pointer;
+      padding: 32px 20px; border: 2px dashed rgba(56,189,248,0.5);
+      border-radius: 14px; text-align: center; cursor: pointer;
+      background: rgba(15,41,55,0.9); margin-bottom: 16px; transition: .2s;
     }
-    .drop-zone.drag-over {
-      background: rgba(56, 189, 248, 0.12);
-      border-color: #38bdf8;
-      color: #ffffff;
+    .drop-zone:hover, .drop-zone.drag-over { background: rgba(56,189,248,0.1); border-color: #38bdf8; }
+    .drop-icon { font-size: 40px; margin-bottom: 8px; }
+    .drop-text { color: #94a3b8; font-size: 14px; }
+    .drop-hint { color: #475569; font-size: 12px; margin-top: 6px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 16px; }
+    input[type=file] { display: none; }
+    label { color: #cbd5e1; font-size: 14px; white-space: nowrap; }
+    select, input[type=range] {
+      background: #0f1720; color: #e6e8eb; border: 1px solid rgba(148,163,184,0.3);
+      border-radius: 8px; padding: 8px 10px; font-size: 14px;
     }
-    .field-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 16px;
+    .btn {
+      border: none; border-radius: 10px; padding: 11px 22px; cursor: pointer;
+      font-size: 15px; font-weight: 600; transition: .2s;
     }
-    .field-group label,
-    .field-group span {
-      min-width: 120px;
-      color: #cbd5e1;
-      font-size: 14px;
+    .btn-primary {
+      background: linear-gradient(135deg, #0ea5e9, #22d3ee); color: #0f1720;
     }
-    .field-group select,
-    .field-group input[type="range"] {
-      flex: 1;
-      min-width: 180px;
-      width: 100%;
-      border-radius: 8px;
-      border: 1px solid rgba(148, 163, 184, 0.3);
-      background: #0f1720;
-      color: #e6e8eb;
-    }
-    .field-group select {
-      padding: 10px 12px;
-    }
-    .field-group input[type="range"] {
-      padding: 0;
-      margin: 0;
-    }
-    .field-group input[type="range"]:disabled {
-      opacity: 0.65;
-      cursor: not-allowed;
-      background: #172330;
-    }
-    .field-group .range-value {
-      min-width: 36px;
-      text-align: center;
-      color: #e2f8ff;
-    }
-    .field-note {
-      margin: 0 0 16px 132px;
-      color: #94a3b8;
-      font-size: 13px;
-      line-height: 1.5;
-      max-width: 560px;
-    }
-    .info-wrapper {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-    }
-    .info-button {
-      width: 34px;
-      height: 34px;
-      min-width: 34px;
-      min-height: 34px;
-      border-radius: 50%;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      background: rgba(15, 41, 55, 0.95);
-      color: #38bdf8;
-      font-weight: bold;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      line-height: 1;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    .info-button:hover {
-      background: rgba(56, 189, 248, 0.15);
-      border-color: #38bdf8;
-    }
-    .info-tooltip {
-      position: absolute;
-      top: 130%;
-      right: 0;
-      width: 260px;
-      padding: 12px 14px;
-      border-radius: 12px;
-      background: rgba(15, 41, 55, 0.98);
-      border: 1px solid rgba(56, 189, 248, 0.22);
-      color: #e2f8ff;
-      font-size: 13px;
-      line-height: 1.55;
-      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
-      opacity: 0;
-      visibility: hidden;
-      transform: translateY(6px);
-      transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
-      z-index: 10;
-    }
-    .info-wrapper:hover .info-tooltip {
-      opacity: 1;
-      visibility: visible;
-      transform: translateY(0);
-    }
-    .radio-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-    }
-    .compression-options {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      flex: 1;
-      min-width: 180px;
-    }
-    .radio-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.3);
-      background: #0f1720;
-      color: #e6e8eb;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s, color 0.2s;
-      user-select: none;
-    }
-    .radio-button input {
-      width: 16px;
-      height: 16px;
-      accent-color: #38bdf8;
-      cursor: pointer;
-    }
-    .radio-button:hover {
-      background: rgba(56, 189, 248, 0.08);
-      border-color: #38bdf8;
-    }
-    button {
-      border: none;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #0ea5e9, #22d3ee);
-      color: #0f1720;
-      padding: 12px 18px;
-      cursor: pointer;
-      font-size: 16px;
-      box-shadow: 0 12px 24px rgba(14, 165, 233, 0.18);
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: default;
-      box-shadow: none;
-    }
-    .progress-container {
-      margin-top: 16px;
-    }
-    .progress-bar-wrapper {
-      width: 100%;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 999px;
-      overflow: hidden;
-      height: 14px;
-      margin-bottom: 8px;
-      border: 1px solid rgba(148, 163, 184, 0.16);
+    .btn-primary:hover:not(:disabled) { box-shadow: 0 4px 20px rgba(14,165,233,0.35); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-clear { background: rgba(255,255,255,0.08); color: #94a3b8; }
+    .btn-clear:hover { background: rgba(255,255,255,0.14); }
+    .progress-wrap { margin-top: 12px; }
+    .progress-bar-bg {
+      width: 100%; height: 10px; background: rgba(255,255,255,0.08);
+      border-radius: 5px; overflow: hidden; margin-bottom: 6px;
     }
     .progress-bar {
-      width: 0%;
-      height: 100%;
-      background: linear-gradient(90deg, #38bdf8, #22d3ee);
-      transition: width 0.2s ease;
+      height: 100%; width: 0%; border-radius: 5px;
+      background: linear-gradient(90deg, #38bdf8, #22d3ee); transition: width .3s;
     }
-    .progress-text {
-      font-size: 14px;
-      color: #cbd5e1;
+    .progress-info { font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; }
+    .file-list { margin-top: 10px; }
+    .file-row {
+      display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+      margin-bottom: 6px; border-radius: 10px; background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(148,163,184,0.1); font-size: 13px;
     }
-    .result {
-      margin-top: 24px;
-    }
-    .result a {
-      color: #7dd3fc;
-      word-break: break-all;
-    }
-    .file-list {
-      margin-top: 12px;
-      color: #cbd5e1;
-    }
-    .file-item {
-      padding: 14px 16px;
-      margin-bottom: 10px;
-      border-radius: 14px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(148, 163, 184, 0.14);
-    }
-    .file-item-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 10px;
-      font-size: 14px;
-      color: #e2e8f0;
-    }
-    .file-status {
-      white-space: nowrap;
-      color: #94a3b8;
-      font-weight: 600;
-    }
-    .file-progress-wrapper {
-      width: 100%;
-      height: 10px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.08);
-      overflow: hidden;
-      border: 1px solid rgba(148, 163, 184, 0.16);
-    }
-    .file-progress-bar {
-      width: 0%;
-      height: 100%;
-      background: linear-gradient(90deg, #38bdf8, #22d3ee);
-      transition: width 0.2s ease;
-    }
-    footer {
-      margin-top: 32px;
-      color: #94a3b8;
-      font-size: 14px;
-    }
+    .file-row .name { flex: 1; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-row .size { color: #64748b; }
+    .file-row .status { min-width: 60px; text-align: right; }
+    .status-ok { color: #4ade80; }
+    .status-err { color: #f87171; }
+    .result { margin-top: 16px; }
+    .result a { color: #7dd3fc; text-decoration: none; }
+    .result a:hover { text-decoration: underline; }
+    .log { margin-top: 14px; padding: 14px; background: rgba(0,0,0,0.3); border-radius: 10px;
+      font-family: 'Consolas', 'Courier New', monospace; font-size: 12px;
+      color: #94a3b8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+    .field-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
   <div class="page">
-    <h1>BMP 转 TIFF 在线转换器</h1>
-
-    <div id="flash" class="flash" style="display:none"></div>
+    <h1>BMP → TIFF 批量转换</h1>
+    <div class="sub">纯前端处理，文件不会上传到服务器，极速转换</div>
 
     <div id="dropZone" class="drop-zone">
-      点击此处或拖拽 BMP 文件到此区域。
+      <div class="drop-icon">📁</div>
+      <div class="drop-text">点击此处或拖拽 BMP 文件/文件夹</div>
+      <div class="drop-hint">自动筛选 .bmp 文件</div>
     </div>
+    <input id="fileInput" type="file" accept=".bmp,image/bmp" multiple />
+    <input id="folderInput" type="file" webkitdirectory />
 
     <div class="actions">
-      <input id="fileInput" type="file" accept=".bmp,image/bmp" multiple />
-      <div class="field-group radio-group">
-        <span>压缩模式</span>
-        <div class="compression-options">
-          <label class="radio-button">
-            <input type="radio" name="compressionMode" value="NONE" checked />
-            NONE
-          </label>
-          <label class="radio-button">
-            <input type="radio" name="compressionMode" value="LZW" />
-            LZW
-          </label>
-          <label class="radio-button">
-            <input type="radio" name="compressionMode" value="ZIP" />
-            ZIP
-          </label>
-          <label class="radio-button">
-            <input type="radio" name="compressionMode" value="JPEG" />
-            JPEG
-          </label>
-        </div>
-      </div>
-      <div class="field-group radio-group">
-        <span>像素排列</span>
-        <div class="compression-options">
-          <label class="radio-button">
-            <input type="radio" name="pixelOrder" value="INTERLEAVED" checked />
-            RGBRGB（Interleaved）
-          </label>
-          <label class="radio-button">
-            <input type="radio" name="pixelOrder" value="PERCHANNEL" />
-            RRR...GGG...BBB...（Per-channel）
-          </label>
-        </div>
-        <div class="info-wrapper">
-          <button type="button" class="info-button" aria-label="像素排列说明">i</button>
-          <div class="info-tooltip">像素排列决定像素存储顺序，对后续图像处理管线影响较大。Interleaved 适合标准显示与常见 RGB 图像，Per-channel 适合专业 TIFF 分通道处理或单通道后处理流程。</div>
-        </div>
-      </div>
-      <div class="field-group" id="jpegQualityGroup">
-        <label for="jpegQuality">JPEG 质量</label>
-        <input id="jpegQuality" type="range" min="4" max="12" step="1" value="12" />
-        <div class="range-value" id="jpegQualityValue">12</div>
-      </div>
-      <div class="field-group">
-        <label for="threadCount">线程数</label>
-        <input id="threadCount" type="range" min="1" max="16" step="1" value="4" />
-        <div class="range-value" id="threadCountValue">4</div>
-      </div>
-      <button id="convertBtn" type="button" disabled>开始转换</button>
+      <button class="btn btn-clear" id="btnFiles">选择文件</button>
+      <button class="btn btn-clear" id="btnFolder">选择文件夹</button>
     </div>
 
-    <div class="progress-container" id="uploadProgressContainer" style="display:none;">
-      <div class="progress-bar-wrapper">
-        <div id="uploadProgressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
-      </div>
-      <div id="uploadProgressText" class="progress-text">等待上传...</div>
-    </div>
-    <div class="progress-container" id="progressContainer" style="display:none;">
-      <div class="progress-bar-wrapper">
-        <div id="progressBar" class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
-      </div>
-      <div id="progressText" class="progress-text">准备中...</div>
+    <div class="field-row" style="margin-bottom:12px;gap:16px;">
+      <label>压缩:</label>
+      <select id="compression">
+        <option value="deflate" selected>ZIP/Deflate (快)</option>
+        <option value="lzw">LZW</option>
+        <option value="none">无压缩</option>
+        <option value="jpeg">JPEG</option>
+      </select>
+      <label>像素排列:</label>
+      <select id="pixelOrder">
+        <option value="interleaved" selected>RGBRGB</option>
+        <option value="perchannel">RRGGBB</option>
+      </select>
+      <label title="线程数">线程:</label>
+      <input id="threads" type="range" min="1" max="8" value="4" style="width:80px">
+      <span id="threadsVal" style="color:#38bdf8;font-size:13px;">4</span>
     </div>
 
-    <ul id="fileList" class="file-list"></ul>
+    <button class="btn btn-primary" id="btnConvert" disabled>🔄 开始转换</button>
 
+    <div id="progressWrap" class="progress-wrap" style="display:none">
+      <div class="progress-bar-bg"><div id="progressBar" class="progress-bar"></div></div>
+      <div class="progress-info"><span id="progressText"></span><span id="progressPct">0%</span></div>
+    </div>
+
+    <div id="fileList" class="file-list"></div>
     <div id="result" class="result"></div>
 
-    <footer>支持 BMP 格式文件，转换后会生成 TIFF 文件并打包为 ZIP。大文件量场景下自动流式写入磁盘，避免内存溢出。</footer>
+    <div style="margin-top:20px;font-size:12px;color:#475569">
+      所有处理在浏览器完成，文件不会离开你的设备。支持 BMP → TIFF，批量 ZIP 下载。
+    </div>
   </div>
 
   <script>
-    const fileInput = document.getElementById('fileInput');
-    const jpegQualityGroup = document.getElementById('jpegQualityGroup');
-    const jpegQuality = document.getElementById('jpegQuality');
-    const jpegQualityValue = document.getElementById('jpegQualityValue');
-    const convertBtn = document.getElementById('convertBtn');
-    const fileList = document.getElementById('fileList');
-    const result = document.getElementById('result');
-    const flash = document.getElementById('flash');
-    const dropZone = document.getElementById('dropZone');
-    const progressContainer = document.getElementById('progressContainer');
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const uploadProgressContainer = document.getElementById('uploadProgressContainer');
-    const uploadProgressBar = document.getElementById('uploadProgressBar');
-    const uploadProgressText = document.getElementById('uploadProgressText');
+    // ═══════════ DOM refs ═══════════
+    const $ = id => document.getElementById(id);
+    const dropZone = $('dropZone');
+    const fileInput = $('fileInput');
+    const folderInput = $('folderInput');
+    const btnConvert = $('btnConvert');
+    const progressWrap = $('progressWrap');
+    const progressBar = $('progressBar');
+    const progressText = $('progressText');
+    const progressPct = $('progressPct');
+    const fileListEl = $('fileList');
+    const resultEl = $('result');
+    const compressionSel = $('compression');
+    const pixelOrderSel = $('pixelOrder');
+    const threadsSlider = $('threads');
+    const threadsVal = $('threadsVal');
 
     let files = [];
 
-    function getCompressionMode() {
-      const selected = document.querySelector('input[name="compressionMode"]:checked');
-      return selected ? selected.value : 'NONE';
-    }
+    // ═══════════ Threads ═══════════
+    const hw = navigator.hardwareConcurrency || 4;
+    threadsSlider.max = Math.min(hw, 8);
+    threadsSlider.value = Math.min(hw, 4);
+    threadsVal.textContent = threadsSlider.value;
+    threadsSlider.oninput = () => threadsVal.textContent = threadsSlider.value;
 
-    function getPixelOrder() {
-      const selected = document.querySelector('input[name="pixelOrder"]:checked');
-      return selected ? selected.value : 'INTERLEAVED';
-    }
+    // ═══════════ File handling ═══════════
+    $('btnFiles').onclick = () => fileInput.click();
+    $('btnFolder').onclick = () => folderInput.click();
 
-    function updateCompressionUI() {
-      const mode = getCompressionMode();
-      const isJpeg = mode === 'JPEG';
-      jpegQuality.disabled = !isJpeg;
-      jpegQualityGroup.style.opacity = isJpeg ? '1' : '0.45';
-      jpegQualityGroup.style.pointerEvents = isJpeg ? 'auto' : 'none';
-    }
-
-    function getJpegBlob(canvas, quality) {
-      return new Promise((resolve, reject) => {
-        canvas.toBlob(blob => {
-          if (blob) resolve(blob);
-          else reject(new Error('无法生成 JPEG 图像'));
-        }, 'image/jpeg', quality);
-      });
-    }
-
-    function packTiffWithCompression(baseBuffer, compressedBytes) {
-      const header = new Uint8Array(baseBuffer, 0, 1000);
-      const output = new Uint8Array(1000 + compressedBytes.length);
-      output.set(header, 0);
-      output.set(compressedBytes, 1000);
-      const dv = new DataView(output.buffer);
-      const tagCount = dv.getUint16(8, false);
-      let entryOffset = 10;
-      for (let i = 0; i < tagCount; i++) {
-        const tag = dv.getUint16(entryOffset, false);
-        const type = dv.getUint16(entryOffset + 2, false);
-        const count = dv.getUint32(entryOffset + 4, false);
-        if (tag === 279 && type === 4 && count === 1) {
-          dv.setUint32(entryOffset + 8, compressedBytes.length, false);
-          break;
-        }
-        entryOffset += 12;
-      }
-      return output.buffer;
-    }
-
-    function compressLZW(rawBytes) {
-      const dict = new Map();
-      for (let i = 0; i < 256; i++) {
-        dict.set(String.fromCharCode(i), i);
-      }
-      let nextCode = 258;
-      let prefix = '';
-      const codes = [];
-      codes.push(256);
-      for (let i = 0; i < rawBytes.length; i++) {
-        const char = String.fromCharCode(rawBytes[i]);
-        const candidate = prefix + char;
-        if (dict.has(candidate)) {
-          prefix = candidate;
-        } else {
-          codes.push(dict.get(prefix));
-          if (nextCode < 4096) {
-            dict.set(candidate, nextCode++);
-          } else {
-            codes.push(256);
-            dict.clear();
-            for (let j = 0; j < 256; j++) dict.set(String.fromCharCode(j), j);
-            nextCode = 258;
-            dict.set(candidate, nextCode++);
-          }
-          prefix = char;
-        }
-      }
-      if (prefix !== '') {
-        codes.push(dict.get(prefix));
-      }
-      codes.push(257);
-      const bytes = [];
-      let bitBuffer = 0;
-      let bitCount = 0;
-      for (const code of codes) {
-        bitBuffer |= code << bitCount;
-        bitCount += 12;
-        while (bitCount >= 8) {
-          bytes.push(bitBuffer & 0xff);
-          bitBuffer >>= 8;
-          bitCount -= 8;
-        }
-      }
-      if (bitCount > 0) {
-        bytes.push(bitBuffer & 0xff);
-      }
-      return new Uint8Array(bytes);
-    }
-
-    async function createTiffBlob(file) {
-      const bitmap = await createImageBitmap(file);
-      const canvas = document.createElement('canvas');
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(bitmap, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const mode = getCompressionMode();
-      const pixelOrder = getPixelOrder();
-      const quality = Number(jpegQuality.value);
-      const metadata = {
-        t305: ['BMP2TIFF Converter'],
-        t274: [1],
-        t273: [1000],
-        t278: [canvas.height],
-        t282: [1],
-        t283: [1],
-        t286: [0],
-        t287: [0],
-        t296: [1]
-      };
-
-      if (mode === 'JPEG') {
-        metadata.t259 = [6];
-        metadata.t262 = [6];
-        metadata.t258 = [8, 8, 8];
-        metadata.t277 = [3];
-      } else {
-        metadata.t262 = [2];
-        metadata.t258 = [8, 8, 8, 8];
-        metadata.t277 = pixelOrder === 'PERCHANNEL' ? [2] : [1];
-        if (mode === 'LZW') metadata.t259 = [5];
-        if (mode === 'ZIP') metadata.t259 = [8];
-        if (mode === 'NONE') metadata.t259 = [1];
-      }
-
-      const rawBuffer = UTIF.encodeImage(imageData.data.buffer, canvas.width, canvas.height, metadata);
-      const rawBytes = new Uint8Array(rawBuffer);
-      if (mode === 'NONE') {
-        return new Blob([rawBytes], { type: 'image/tiff' });
-      }
-
-      if (mode === 'ZIP' || mode === 'LZW') {
-        const sourceBytes = rawBytes.subarray(1000, 1000 + canvas.width * canvas.height * 4);
-        const compressed = mode === 'ZIP'
-          ? pako.deflate(sourceBytes)
-          : compressLZW(sourceBytes);
-        const packed = packTiffWithCompression(rawBuffer, compressed);
-        return new Blob([packed], { type: 'image/tiff' });
-      }
-
-      if (mode === 'JPEG') {
-        const jpegBlob = await getJpegBlob(canvas, quality / 12);
-        const jpegBytes = new Uint8Array(await jpegBlob.arrayBuffer());
-        const packed = packTiffWithCompression(rawBuffer, jpegBytes);
-        return new Blob([packed], { type: 'image/tiff' });
-      }
-
-      return new Blob([rawBytes], { type: 'image/tiff' });
-    }
-
-    function showMessage(text, isError = false) {
-      flash.textContent = text;
-      flash.style.display = 'block';
-      if (isError) {
-        flash.style.background = 'rgba(248, 113, 113, 0.18)';
-        flash.style.borderColor = 'rgba(248, 113, 113, 0.35)';
-        flash.style.color = '#ffe4e6';
-      } else {
-        flash.style.background = 'rgba(56, 189, 248, 0.12)';
-        flash.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-        flash.style.color = '#dbeafe';
-      }
-    }
-
-    function clearMessage() {
-      flash.style.display = 'none';
-    }
-
-    function updateFileList(selectedFiles) {
-      fileList.innerHTML = '';
-      result.innerHTML = '';
-      clearMessage();
-
-      if (!selectedFiles.length) {
-        convertBtn.disabled = true;
-        showMessage('请先选择一个或多个 BMP 文件。', true);
-        return;
-      }
-
-      selectedFiles.forEach(file => {
-        const li = document.createElement('li');
-        li.textContent = `${file.name} (${Math.round(file.size / 1024)} KB)`;
-        fileList.appendChild(li);
-      });
-
-      convertBtn.disabled = false;
-    }
-
-    function filterBmpFiles(fileArray) {
-      return fileArray.filter(file => file.name.toLowerCase().endsWith('.bmp'));
-    }
-
-    async function handleFileInputChange(event) {
-      const chosen = Array.from(event.target.files || []);
-      files = filterBmpFiles(chosen);
-      updateFileList(files);
-    }
-
-    async function getDroppedFiles(dataTransfer) {
-      const items = Array.from(dataTransfer.items || []);
-      if (items.length === 0) {
-        return Array.from(dataTransfer.files || []);
-      }
-
-      const entries = items
-        .map(item => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null)
-        .filter(Boolean);
-
-      const allFiles = [];
-      async function traverseEntry(entry, path = '') {
-        if (entry.isFile) {
-          return new Promise(resolve => entry.file(file => {
-            file.fullPath = path + file.name;
-            resolve(file);
-          }));
-        }
-        if (entry.isDirectory) {
-          const reader = entry.createReader();
-          return new Promise(resolve => {
-            reader.readEntries(async entries => {
-              const nestedPromises = entries.map(child => traverseEntry(child, path + entry.name + '/'));
-              const nestedFiles = await Promise.all(nestedPromises);
-              resolve(nestedFiles.flat());
-            });
-          });
-        }
-        return [];
-      }
-
-      for (const entry of entries) {
-        const found = await traverseEntry(entry);
-        allFiles.push(...found.flat());
-      }
-
-      return allFiles.length ? allFiles : Array.from(dataTransfer.files || []);
-    }
-
-    dropZone.addEventListener('dragenter', event => {
-      event.preventDefault();
-      dropZone.classList.add('drag-over');
-    });
-
-    dropZone.addEventListener('click', () => {
-      fileInput.click();
-    });
-
-    dropZone.addEventListener('dragover', event => {
-      event.preventDefault();
-      dropZone.classList.add('drag-over');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('drag-over');
-    });
-
-    dropZone.addEventListener('drop', async event => {
-      event.preventDefault();
-      dropZone.classList.remove('drag-over');
-      const droppedFiles = await getDroppedFiles(event.dataTransfer);
-      files = filterBmpFiles(droppedFiles);
-      if (!files.length) {
-        convertBtn.disabled = true;
-        showMessage('未找到 BMP 文件，请拖拽 BMP 文件。', true);
-        fileList.innerHTML = '';
-        result.innerHTML = '';
-        return;
-      }
-      updateFileList(files);
-    });
-
-    fileInput.addEventListener('change', handleFileInputChange);
-    document.querySelectorAll('input[name="compressionMode"]').forEach(radio => {
-      radio.addEventListener('change', updateCompressionUI);
-    });
-    jpegQuality.addEventListener('input', () => {
-      jpegQualityValue.textContent = jpegQuality.value;
-    });
-
-    const threadCountSlider = document.getElementById('threadCount');
-    const threadCountValue = document.getElementById('threadCountValue');
-    const hardwareThreads = navigator.hardwareConcurrency || 4;
-    const MAX_CONCURRENT_WORKERS = 4;
-    const defaultThreadCount = Math.min(hardwareThreads, MAX_CONCURRENT_WORKERS);
-    threadCountSlider.max = defaultThreadCount;
-    threadCountSlider.value = defaultThreadCount;
-    threadCountValue.textContent = defaultThreadCount;
-    threadCountSlider.addEventListener('input', () => {
-      threadCountValue.textContent = threadCountSlider.value;
-    });
-
-    updateCompressionUI();
-
-    const workerSource = `importScripts('https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js','https://cdn.jsdelivr.net/npm/utif@3.0.0/UTIF.min.js');
-
-function packTiffWithCompression(baseBuffer, compressedBytes) {
-  const header = new Uint8Array(baseBuffer, 0, 1000);
-  const output = new Uint8Array(1000 + compressedBytes.length);
-  output.set(header, 0);
-  output.set(compressedBytes, 1000);
-  const dv = new DataView(output.buffer);
-  const tagCount = dv.getUint16(8, false);
-  let entryOffset = 10;
-  for (let i = 0; i < tagCount; i++) {
-    const tag = dv.getUint16(entryOffset, false);
-    const type = dv.getUint16(entryOffset + 2, false);
-    const count = dv.getUint32(entryOffset + 4, false);
-    if (tag === 279 && type === 4 && count === 1) {
-      dv.setUint32(entryOffset + 8, compressedBytes.length, false);
-      break;
-    }
-    entryOffset += 12;
-  }
-  return output.buffer;
-}
-
-function compressLZW(rawBytes) {
-  const dict = new Map();
-  for (let i = 0; i < 256; i++) {
-    dict.set(String.fromCharCode(i), i);
-  }
-  let nextCode = 258;
-  let prefix = '';
-  const codes = [];
-  codes.push(256);
-  for (let i = 0; i < rawBytes.length; i++) {
-    const char = String.fromCharCode(rawBytes[i]);
-    const candidate = prefix + char;
-    if (dict.has(candidate)) {
-      prefix = candidate;
-    } else {
-      codes.push(dict.get(prefix));
-      if (nextCode < 4096) {
-        dict.set(candidate, nextCode++);
-      } else {
-        codes.push(256);
-        dict.clear();
-        for (let j = 0; j < 256; j++) dict.set(String.fromCharCode(j), j);
-        nextCode = 258;
-        dict.set(candidate, nextCode++);
-      }
-      prefix = char;
-    }
-  }
-  if (prefix !== '') {
-    codes.push(dict.get(prefix));
-  }
-  codes.push(257);
-  const bytes = [];
-  let bitBuffer = 0;
-  let bitCount = 0;
-  for (const code of codes) {
-    bitBuffer |= code << bitCount;
-    bitCount += 12;
-    while (bitCount >= 8) {
-      bytes.push(bitBuffer & 0xff);
-      bitBuffer >>= 8;
-      bitCount -= 8;
-    }
-  }
-  if (bitCount > 0) {
-    bytes.push(bitBuffer & 0xff);
-  }
-  return new Uint8Array(bytes);
-}
-
-self.onmessage = async function(event) {
-  const { file, mode, quality, pixelOrder } = event.data;
-  try {
-    const bitmap = await createImageBitmap(file);
-    const width = bitmap.width;
-    const height = bitmap.height;
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(bitmap, 0, 0);
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const metadata = {
-      t305: ['BMP2TIFF Converter'],
-      t274: [1],
-      t273: [1000],
-      t278: [height],
-      t282: [1],
-      t283: [1],
-      t286: [0],
-      t287: [0],
-      t296: [1]
+    dropZone.onclick = () => fileInput.click();
+    dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+    dropZone.ondrop = e => {
+      e.preventDefault(); dropZone.classList.remove('drag-over');
+      handleDropped(e.dataTransfer);
     };
+    fileInput.onchange = () => addFiles(Array.from(fileInput.files));
+    folderInput.onchange = () => addFiles(Array.from(folderInput.files));
 
-    if (mode === 'JPEG') {
-      metadata.t259 = [6];
-      metadata.t262 = [6];
-      metadata.t258 = [8, 8, 8];
-      metadata.t277 = [3];
-    } else {
-      metadata.t262 = [2];
-      metadata.t258 = [8, 8, 8, 8];
-      metadata.t277 = pixelOrder === 'PERCHANNEL' ? [2] : [1];
-      if (mode === 'LZW') metadata.t259 = [5];
-      if (mode === 'ZIP') metadata.t259 = [8];
-      if (mode === 'NONE') metadata.t259 = [1];
-    }
+    async function handleDropped(dt) {
+      const items = Array.from(dt.items || []);
+      const entries = items.map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
+      if (!entries.length) { addFiles(Array.from(dt.files || [])); return; }
 
-    const rawBuffer = UTIF.encodeImage(imageData.data.buffer, width, height, metadata);
-    if (mode === 'NONE') {
-      self.postMessage({ success: true, buffer: rawBuffer }, [rawBuffer]);
-      return;
-    }
-
-    let compressed;
-    if (mode === 'JPEG') {
-      const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: Math.max(0.01, Math.min(1, quality / 12)) });
-      compressed = new Uint8Array(await jpegBlob.arrayBuffer());
-    } else {
-      const sourceBytes = new Uint8Array(rawBuffer, 1000, width * height * 4);
-      compressed = mode === 'ZIP' ? pako.deflate(sourceBytes) : compressLZW(sourceBytes);
-    }
-
-    const packed = packTiffWithCompression(rawBuffer, compressed);
-    self.postMessage({ success: true, buffer: packed }, [packed]);
-  } catch (error) {
-    self.postMessage({ success: false, error: error.message || 'Worker 转换失败' });
-  }
-};
-`;
-    const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
-
-    function createWorker() {
-      return new Worker(workerUrl);
-    }
-
-    function processFileWithWorker(file) {
-      return new Promise(resolve => {
-        let worker;
-        try {
-          worker = createWorker();
-        } catch (error) {
-          resolve({ success: false, buffer: null, error: error.message || '无法创建 Worker' });
-          return;
-        }
-
-        const cleanup = () => {
-          if (worker) {
-            worker.terminate();
-            worker = null;
-          }
-          clearTimeout(timeoutId);
-        };
-
-        const timeoutId = setTimeout(() => {
-          cleanup();
-          resolve({ success: false, buffer: null, error: 'Worker 超时' });
-        }, 20000);
-
-        worker.onmessage = ({ data }) => {
-          cleanup();
-          if (data.success) {
-            resolve({ success: true, buffer: data.buffer, error: null });
-          } else {
-            resolve({ success: false, buffer: null, error: data.error || '转换失败' });
-          }
-        };
-        worker.onerror = errorEvent => {
-          cleanup();
-          resolve({ success: false, buffer: null, error: errorEvent.message || 'Worker 运行错误' });
-        };
-
-        try {
-          worker.postMessage({ file, mode: getCompressionMode(), quality: Number(jpegQuality.value), pixelOrder: getPixelOrder() });
-        } catch (error) {
-          cleanup();
-          resolve({ success: false, buffer: null, error: error.message || 'Worker postMessage 失败' });
-        }
-      });
-    }
-
-    async function convertFilesInMainThread(files) {
-      const total = files.length;
-      const results = new Array(total);
-
-      for (let index = 0; index < total; index++) {
-        const file = files[index];
-        const percent = Math.round((index / total) * 100);
-        setProgress(percent, `主线程转换 ${index + 1}/${total}: ${file.name}`);
-        setUploadProgress(percent, `上传进度 ${index + 1}/${total}`);
-        try {
-          const tifBlob = await createTiffBlob(file);
-          const buffer = await tifBlob.arrayBuffer();
-          results[index] = { success: true, buffer, error: null };
-        } catch (error) {
-          results[index] = { success: false, buffer: null, error: error.message || '主线程转换失败' };
+      const all = [];
+      async function walk(entry) {
+        if (entry.isFile) { const f = await new Promise(r => entry.file(r)); all.push(f); }
+        else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const subs = await new Promise(r => reader.readEntries(r));
+          await Promise.all(subs.map(walk));
         }
       }
-
-      setProgress(100, '主线程转换完成');
-      return results;
+      await Promise.all(entries.map(walk));
+      addFiles(all);
     }
 
-    async function convertFilesInParallel(files, onFileComplete) {
-      const total = files.length;
-      const threadCount = Math.min(Number(threadCountSlider.value), total);
-      let nextIndex = 0;
-      let completed = 0;
-      let activeCount = 0;
-
-      return new Promise(resolve => {
-        function startNext() {
-          while (activeCount < threadCount && nextIndex < total) {
-            const index = nextIndex++;
-            const file = files[index];
-            activeCount += 1;
-            processFileWithWorker(file).then(result => {
-              completed += 1;
-              activeCount -= 1;
-              const percent = Math.round((completed / total) * 100);
-              setUploadProgress(percent, `转换进度 ${completed}/${total}`);
-              if (onFileComplete) onFileComplete(index, result);
-              startNext();
-              if (completed === total) {
-                resolve();
-              }
-            });
-          }
-        }
-        startNext();
-      });
+    function addFiles(arr) {
+      const bmps = arr.filter(f => f.name.toLowerCase().endsWith('.bmp'));
+      if (!bmps.length) return;
+      // dedup
+      const seen = new Set(files.map(f => f.name + f.size));
+      for (const f of bmps) if (!seen.has(f.name + f.size)) { files.push(f); seen.add(f.name + f.size); }
+      renderList();
     }
 
-    function resetProgress() {
-      progressContainer.style.display = 'none';
-      progressBar.style.width = '0%';
-      progressBar.setAttribute('aria-valuenow', '0');
-      progressText.textContent = '';
-      uploadProgressContainer.style.display = 'none';
-      uploadProgressBar.style.width = '0%';
-      uploadProgressBar.setAttribute('aria-valuenow', '0');
-      uploadProgressText.textContent = '';
-    }
-
-    function setProgress(percent, text) {
-      progressContainer.style.display = 'block';
-      progressBar.style.width = `${percent}%`;
-      progressBar.setAttribute('aria-valuenow', percent.toFixed(0));
-      progressText.textContent = text;
-    }
-
-    function setUploadProgress(percent, text) {
-      uploadProgressContainer.style.display = 'block';
-      uploadProgressBar.style.width = `${percent}%`;
-      uploadProgressBar.setAttribute('aria-valuenow', percent.toFixed(0));
-      uploadProgressText.textContent = text;
-    }
-
-    convertBtn.addEventListener('click', async () => {
-      if (files.length === 0) {
-        showMessage('请先选择 BMP 文件。', true);
+    function renderList() {
+      if (!files.length) {
+        fileListEl.innerHTML = '';
+        btnConvert.disabled = true;
         return;
       }
+      btnConvert.disabled = false;
+      const totalSize = files.reduce((s, f) => s + f.size, 0);
+      fileListEl.innerHTML = files.map((f, i) =>
+        `<div class="file-row">
+          <span class="name">📄 ${f.name}</span>
+          <span class="size">${fmtSize(f.size)}</span>
+          <span style="color:#f87171;cursor:pointer;padding:0 8px;" onclick="removeFile(${i})">✕</span>
+        </div>`
+      ).join('');
+      fileListEl.innerHTML += `<div style="font-size:12px;color:#64748b;margin-top:6px">${files.length} 个文件, ${fmtSize(totalSize)}</div>`;
+    }
 
-      convertBtn.disabled = true;
-      fileInput.disabled = true;
-      clearMessage();
-      result.innerHTML = '';
-      resetProgress();
+    function removeFile(i) { files.splice(i, 1); renderList(); }
+    function fmtSize(b) { return b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB'; }
+
+    // ═══════════ Fast TIF Builder ═══════════
+    // Builds a valid TIFF from raw RGBA pixel data, directly (no UTIF overhead)
+
+    function tifPutLE(buf, off, val, bytes) {
+      for (let i = 0; i < bytes; i++) { buf[off + i] = (val >> (i * 8)) & 0xFF; }
+    }
+
+    function buildTIF(width, height, rgba, opts) {
+      const { comp, pixelOrder } = opts;
+      const totalPx = width * height;
+
+      // Rearrange pixel data if needed
+      let raw;
+      if (pixelOrder === 'perchannel') {
+        raw = new Uint8Array(totalPx * 4);
+        for (let i = 0; i < totalPx; i++) {
+          raw[i] = rgba[i * 4];                   // R
+          raw[totalPx + i] = rgba[i * 4 + 1];     // G
+          raw[totalPx * 2 + i] = rgba[i * 4 + 2]; // B
+          raw[totalPx * 3 + i] = rgba[i * 4 + 3]; // A
+        }
+      } else {
+        raw = rgba;
+      }
+
+      // Compress
+      let imageData, compTag;
+      if (comp === 'deflate') {
+        imageData = pako_deflate(raw);
+        compTag = 8; // Adobe Deflate
+      } else if (comp === 'lzw') {
+        imageData = lzwEncode(raw);
+        compTag = 5;
+      } else if (comp === 'jpeg') {
+        // JPEG handled separately via canvas
+        imageData = raw; // placeholder
+        compTag = 7;
+      } else {
+        imageData = raw;
+        compTag = 1;
+      }
+
+      // TIFF header
+      const dataOff = 8 + 2 + 12 * 12 + 4; // header + count + 12 tags * 12 + nextIfd
+      const buf = new Uint8Array(dataOff + imageData.byteLength);
+      // Byte order: "II"
+      buf[0] = 0x49; buf[1] = 0x49;
+      // Magic: 42
+      tifPutLE(buf, 2, 42, 2);
+      // IFD offset
+      tifPutLE(buf, 4, 8, 4);
+
+      let pos = 8;
+      // Entry count (12 tags)
+      tifPutLE(buf, pos, 12, 2); pos += 2;
+
+      const tags = [
+        [256, 4, 1, width],      // ImageWidth (LONG)
+        [257, 4, 1, height],     // ImageLength
+        [258, 3, 4, 0],          // BitsPerSample (SHORT*4) → write to overflow
+        [259, 3, 1, compTag],    // Compression
+        [262, 3, 1, 2],          // PhotometricInterpretation (RGB=2)
+        [273, 4, 1, dataOff],    // StripOffsets
+        [277, 3, 1, 4],          // SamplesPerPixel
+        [278, 4, 1, height],     // RowsPerStrip
+        [279, 4, 1, imageData.byteLength], // StripByteCounts
+        [282, 5, 1, 0],          // XResolution → overflow
+        [283, 5, 1, 0],          // YResolution → overflow
+        [284, 3, 1, pixelOrder === 'perchannel' ? 2 : 1], // PlanarConfiguration
+      ];
+
+      // We need overflow for BitsPerSample (4 SHORTs), XResolution, YResolution
+      let overflow = dataOff + imageData.byteLength;
+      const overflowData = [];
+      // BitsPerSample: 4 SHORTs = 8 bytes
+      const bpsOff = overflow;
+      for (const v of [8, 8, 8, 8]) {
+        overflowData.push(v & 0xFF, (v >> 8) & 0xFF);
+        overflow += 2;
+      }
+      // XResolution: RATIONAL (2 LONGs) = 8 bytes
+      const xrOff = overflow;
+      overflowData.push(72, 0, 0, 0);  // numerator
+      overflowData.push(1, 0, 0, 0);   // denominator
+      overflow += 8;
+      // YResolution: RATIONAL = 8 bytes
+      const yrOff = overflow;
+      overflowData.push(72, 0, 0, 0);
+      overflowData.push(1, 0, 0, 0);
+      overflow += 8;
+
+      // Patch overflow offsets into tags
+      tags[2][3] = bpsOff;
+      tags[9][3] = xrOff;
+      tags[10][3] = yrOff;
+
+      // Write tags
+      for (const [tag, type, count, value] of tags) {
+        tifPutLE(buf, pos, tag, 2);
+        tifPutLE(buf, pos + 2, type, 2);
+        tifPutLE(buf, pos + 4, count, 4);
+        if (type === 3 && count === 1 && value < 0x10000) {
+          // SHORT fits inline
+          tifPutLE(buf, pos + 8, value, 2);
+          tifPutLE(buf, pos + 10, 0, 2);
+        } else if (type === 4 && count === 1) {
+          tifPutLE(buf, pos + 8, value, 4);
+        } else {
+          tifPutLE(buf, pos + 8, value, 4); // overflow offset
+        }
+        pos += 12;
+      }
+
+      // Next IFD = 0
+      tifPutLE(buf, pos, 0, 4);
+
+      // Image data
+      buf.set(imageData instanceof Uint8Array ? imageData : new Uint8Array(imageData), dataOff);
+      // Overflow data
+      if (overflowData.length) {
+        buf.set(new Uint8Array(overflowData), dataOff + imageData.byteLength);
+      }
+
+      return buf.buffer;
+    }
+
+    // ═══════════ Pako (Deflate) - inline minimal bundling ═══════════
+    // We embed a tiny deflate via raw DeflateStream. pako is loaded via script tag above.
+    // But for workers we need it too. We'll pass data back to main thread for compression.
+    // Actually, we'll do compression in main thread after getting raw pixels from workers.
+
+    // ═══════════ LZW - optimized numeric version (no strings!) ═══════════
+    function lzwEncode(data) {
+      // Use a Map with integer keys for speed
+      // Key: combine prefix and next byte into one integer
+      // Since we're compressing bytes, prefix can be represented as the code (int)
+      // We need a Map<[prefixCode, byte], newCode> but Map doesn't work with arrays as values...
+      // Use nested Map: dict[prefix][byte] = code
+      const dict = [];
+      for (let i = 0; i < 256; i++) {
+        dict[i] = {}; // not really needed for leaves, but for prefix lookup
+      }
+      // Actually, let me use a different approach: Map with key = prefixCode * 256 + byte
+      const codeMap = new Map();
+      let nextCode = 258;
+      const CLEAR = 256, EOI = 257;
+
+      let prefix = data[0];
+      const codes = [CLEAR];
+
+      for (let i = 1; i < data.length; i++) {
+        const k = data[i];
+        const key = prefix * 256 + k;
+        if (codeMap.has(key)) {
+          prefix = codeMap.get(key);
+        } else {
+          codes.push(prefix);
+          if (nextCode < 4096) {
+            codeMap.set(key, nextCode++);
+          } else {
+            codes.push(CLEAR);
+            codeMap.clear();
+            nextCode = 258;
+            codeMap.set(key, nextCode++);
+          }
+          prefix = k;
+        }
+      }
+      codes.push(prefix);
+      codes.push(EOI);
+
+      // Bit packing - TIFF LZW: pack MSB first, but little-endian byte order
+      const out = [];
+      let buf = 0, bits = 0;
+      for (const code of codes) {
+        buf |= code << bits;
+        bits += 12;
+        while (bits >= 8) {
+          out.push(buf & 0xFF);
+          buf >>= 8;
+          bits -= 8;
+        }
+      }
+      if (bits > 0) out.push(buf & 0xFF);
+      return new Uint8Array(out);
+    }
+
+    // ═══════════ Worker ═══════════
+    // Worker only decodes BMP→RGBA, main thread handles TIF building (lighter worker)
+    const workerCode = `
+      self.onmessage = async function(e) {
+        const { file, idx } = e.data;
+        try {
+          const bitmap = await createImageBitmap(file);
+          const w = bitmap.width, h = bitmap.height;
+          const c = new OffscreenCanvas(w, h);
+          const ctx = c.getContext('2d');
+          ctx.drawImage(bitmap, 0, 0);
+          const imgData = ctx.getImageData(0, 0, w, h);
+          // Transfer the RGBA buffer
+          self.postMessage({ idx, w, h, rgba: imgData.data.buffer }, [imgData.data.buffer]);
+        } catch(err) {
+          self.postMessage({ idx, error: err.message });
+        }
+      };
+    `;
+    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+
+    function spawnWorker() { return new Worker(workerUrl); }
+
+    // ═══════════ Conversion ═══════════
+    btnConvert.onclick = async () => {
+      if (!files.length) return;
+      btnConvert.disabled = true;
+      resultEl.innerHTML = '';
+      progressWrap.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressPct.textContent = '0%';
+      progressText.textContent = '准备中...';
+
+      const comp = compressionSel.value;
+      const pixelOrder = pixelOrderSel.value;
+      const threadCount = Math.min(+threadsSlider.value, files.length);
       const total = files.length;
-      const threadCount = Math.min(Number(threadCountSlider.value), total);
-      setProgress(0, `准备转换 ${total} 个文件，使用 ${threadCount} 线程...`);
-      setUploadProgress(0, '准备转换...');
 
-      /* ---- 尝试 File System Access API 直接写入磁盘 ---- */
-      let useFileSystemAPI = false;
-      let writableStream = null;
+      // Track per-file progress
+      const results = new Array(total).fill(null);
+      const fileEls = new Array(total);
+      fileListEl.querySelectorAll('.file-row').forEach((el, i) => {
+        if (i < total) fileEls[i] = el.querySelector('.status') || el.appendChild(document.createElement('span'));
+      });
 
+      function updateStatus(i, text, cls) {
+        const row = fileListEl.querySelectorAll('.file-row')[i];
+        if (row) {
+          let st = row.querySelector('.status');
+          if (!st) { st = document.createElement('span'); st.className = 'status'; row.appendChild(st); }
+          st.textContent = text;
+          st.className = 'status ' + (cls || '');
+        }
+      }
+
+      let completed = 0;
+
+      // Parallel processing: run workers in batches
+      function processBatch() {
+        return new Promise(resolve => {
+          let nextIdx = 0;
+          let active = 0;
+
+          function startOne() {
+            if (nextIdx >= total) return;
+            const i = nextIdx++;
+            active++;
+            updateStatus(i, '解码中...', '');
+
+            const worker = spawnWorker();
+            const timeout = setTimeout(() => {
+              worker.terminate();
+              updateStatus(i, '超时', 'status-err');
+              results[i] = { error: '超时' };
+              onDone(i);
+            }, 30000);
+
+            worker.onmessage = (e) => {
+              clearTimeout(timeout);
+              worker.terminate();
+              const d = e.data;
+              if (d.error) {
+                updateStatus(i, '失败', 'status-err');
+                results[i] = { error: d.error };
+              } else {
+                updateStatus(i, '编码中...', '');
+                // Build TIF in main thread (fast)
+                try {
+                  const rgba = new Uint8Array(d.rgba);
+                  let tifBuf;
+                  if (comp === 'jpeg') {
+                    results[i] = { jpeg: true, w: d.w, h: d.h, rgba, file: files[i] };
+                    updateStatus(i, 'JPEG压缩...', '');
+                  } else {
+                    tifBuf = buildTIF(d.w, d.h, rgba, { comp, pixelOrder });
+                    results[i] = { buffer: tifBuf, name: files[i].name.replace(/\.bmp$/i, '.tif') };
+                    updateStatus(i, '✓', 'status-ok');
+                  }
+                } catch (err) {
+                  updateStatus(i, '编码失败', 'status-err');
+                  results[i] = { error: err.message };
+                }
+              }
+              onDone(i);
+            };
+            worker.onerror = () => {
+              clearTimeout(timeout);
+              worker.terminate();
+              updateStatus(i, '错误', 'status-err');
+              results[i] = { error: 'Worker error' };
+              onDone(i);
+            };
+            worker.postMessage({ file: files[i], idx: i });
+          }
+
+          function onDone(i) {
+            completed++;
+            const pct = Math.round(completed / total * 100);
+            progressBar.style.width = pct + '%';
+            progressPct.textContent = pct + '%';
+            progressText.textContent = `完成 ${completed}/${total}`;
+            active--;
+            startOne();
+            if (completed >= total) resolve();
+          }
+
+          // Start initial batch
+          for (let j = 0; j < threadCount; j++) startOne();
+        });
+      }
+
+      await processBatch();
+
+      // Handle JPEG conversions (need canvas in main thread)
+      for (let i = 0; i < total; i++) {
+        if (results[i]?.jpeg) {
+          const { w, h, rgba, file } = results[i];
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(w, h);
+            imgData.data.set(rgba);
+            ctx.putImageData(imgData, 0, 0);
+            const jpegBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+            const jpegBuf = await jpegBlob.arrayBuffer();
+            // Build TIF with JPEG data
+            const tifBuf = buildTIF_JPEG(w, h, rgba, { pixelOrder }, new Uint8Array(jpegBuf));
+            results[i] = { buffer: tifBuf, name: file.name.replace(/\.bmp$/i, '.tif') };
+            updateStatus(i, '✓', 'status-ok');
+          } catch (e) {
+            results[i] = { error: e.message };
+            updateStatus(i, 'JPEG失败', 'status-err');
+          }
+        }
+      }
+
+      // ═══════════ ZIP & Download ═══════════
+      progressText.textContent = '打包 ZIP...';
+      let successCount = 0;
+      const logLines = [];
+
+      // Try File System Access API
+      let wStream = null;
       if (typeof window.showSaveFilePicker === 'function') {
         try {
-          const handle = await window.showSaveFilePicker({
+          const h = await window.showSaveFilePicker({
             suggestedName: 'converted_tifs.zip',
-            types: [{ description: 'ZIP 文件', accept: { 'application/zip': ['.zip'] } }]
+            types: [{ description: 'ZIP', accept: { 'application/zip': ['.zip'] } }]
           });
-          writableStream = await handle.createWritable();
-          useFileSystemAPI = true;
+          wStream = await h.createWritable();
         } catch (e) {
-          if (e.name === 'AbortError') {
-            convertBtn.disabled = false;
-            fileInput.disabled = false;
-            return;
-          }
+          if (e.name === 'AbortError') { btnConvert.disabled = false; return; }
         }
       }
 
-      /* ---- fflate 流式 ZIP ---- */
-      const zip = new fflate.Zip();
       const chunks = [];
-      let zipDoneResolve;
-      const zipDone = new Promise(resolve => { zipDoneResolve = resolve; });
-
+      let zipDone;
+      const zipDonePromise = new Promise(r => zipDone = r);
+      const zip = new fflate.Zip();
       zip.ondata = (err, data, final) => {
-        if (err) {
-          if (useFileSystemAPI && writableStream) try { writableStream.abort(); } catch (_) {}
-          throw err;
-        }
-        if (useFileSystemAPI) {
-          writableStream.write(data);
-        } else {
-          chunks.push(data);
-        }
+        if (err) throw err;
+        if (wStream) wStream.write(data);
+        else chunks.push(data);
         if (final) {
-          (useFileSystemAPI ? writableStream.close() : Promise.resolve()).then(zipDoneResolve);
+          (wStream ? wStream.close() : Promise.resolve()).then(zipDone);
         }
       };
 
-      /* ---- 逐个添加到 ZIP（保持文件顺序） ---- */
-      let nextToAdd = 0;
-      const completedMap = new Map();
-      let convertedCount = 0;
-      const reportLines = [];
-      let allConverted = false;
-
-      function drainZipQueue() {
-        while (completedMap.has(nextToAdd)) {
-          const item = completedMap.get(nextToAdd);
-          completedMap.delete(nextToAdd);
-
-          if (item.success) {
-            try {
-              const entry = new fflate.ZipDeflate(item.name, { level: 6 });
-              zip.add(entry);
-              entry.push(new Uint8Array(item.buffer), true);
-              convertedCount++;
-              reportLines.push(`✔ ${item.name}`);
-            } catch (e) {
-              reportLines.push(`✖ ${item.name}: 打包失败`);
-            }
-            item.buffer = null;
-          } else {
-            reportLines.push(item.error);
-          }
-
-          nextToAdd++;
-          const pct = total > 0 ? Math.round((nextToAdd / total) * 100) : 100;
-          setProgress(pct, `打包中 ${nextToAdd}/${total}`);
-        }
-
-        if (allConverted && nextToAdd === total) {
-          if (convertedCount > 0) {
-            zip.end();
-          } else {
-            zipDoneResolve();
-          }
-        }
-      }
-
-      /* ---- Worker 并行转换，每完成一个立即入队 ---- */
-      let workerAllFailed = true;
-
-      function onFileComplete(index, result) {
-        if (result.success) workerAllFailed = false;
-        if (result.success) {
-          const name = files[index].name.replace(/\.bmp$/i, '.tif');
-          completedMap.set(index, { success: true, buffer: result.buffer, name });
+      for (let i = 0; i < total; i++) {
+        const r = results[i];
+        if (r?.buffer) {
+          const entry = new fflate.ZipDeflate(r.name, { level: 6 });
+          zip.add(entry);
+          entry.push(new Uint8Array(r.buffer), true);
+          successCount++;
+          logLines.push(`✔ ${r.name}`);
+          r.buffer = null; // free memory
         } else {
-          completedMap.set(index, { success: false, error: `✖ ${files[index].name}: ${result.error}` });
+          logLines.push(`✖ ${files[i].name}: ${r?.error || '未知错误'}`);
         }
-        drainZipQueue();
       }
 
-      await convertFilesInParallel(files, onFileComplete);
-      allConverted = true;
-      drainZipQueue();
-
-      /* ---- 所有 Worker 失败时回退主线程 ---- */
-      if (workerAllFailed) {
-        showMessage('多线程转换失败，回退到单线程', true);
-        if (useFileSystemAPI && writableStream) {
-          try { writableStream.abort(); } catch (_) {}
-          useFileSystemAPI = false;
-        }
-        nextToAdd = 0;
-        completedMap.clear();
-        convertedCount = 0;
-        reportLines.length = 0;
-        allConverted = false;
-        chunks.length = 0;
-
-        const fbZip = new fflate.Zip();
-        const fbChunks = [];
-        let fbDoneResolve;
-        const fbDone = new Promise(r => { fbDoneResolve = r; });
-        fbZip.ondata = (err, data, final) => {
-          if (err) throw err;
-          fbChunks.push(data);
-          if (final) fbDoneResolve();
-        };
-
-        for (let i = 0; i < total; i++) {
-          const file = files[i];
-          const percent = Math.round(((i + 1) / total) * 100);
-          setProgress(percent, `主线程转换 ${i + 1}/${total}: ${file.name}`);
-          setUploadProgress(percent, `转换进度 ${i + 1}/${total}`);
-          try {
-            const tifBlob = await createTiffBlob(file);
-            const buffer = await tifBlob.arrayBuffer();
-            const name = file.name.replace(/\.bmp$/i, '.tif');
-            const entry = new fflate.ZipDeflate(name, { level: 6 });
-            fbZip.add(entry);
-            entry.push(new Uint8Array(buffer), true);
-            convertedCount++;
-            reportLines.push(`✔ ${name}`);
-          } catch (error) {
-            reportLines.push(`✖ ${file.name}: ${error.message || '主线程转换失败'}`);
-          }
-        }
-
-        if (convertedCount > 0) {
-          fbZip.end();
-          await fbDone;
-          chunks.push(...fbChunks);
-        }
-      } else {
-        await zipDone;
+      if (successCount > 0) {
+        zip.end();
+        await zipDonePromise;
       }
 
-      /* ---- 显示结果 ---- */
-      if (convertedCount === 0) {
-        result.innerHTML = '<p>没有成功转换的文件，请确认 BMP 文件是否有效。</p>';
-        resetProgress();
-      } else if (useFileSystemAPI) {
-        result.innerHTML = `<p>已成功转换 ${convertedCount} 个文件并保存到本地。</p>`;
-        setProgress(100, '完成，文件已保存。');
-      } else {
-        const zipBlob = new Blob(chunks, { type: 'application/zip' });
-        const url = URL.createObjectURL(zipBlob);
-        result.innerHTML = `
-          <p>已成功转换 ${convertedCount} 个文件。</p>
-          <p><a id="downloadLink" href="${url}" download="converted_tifs.zip">点击下载 ZIP 包</a></p>
+      // Show result
+      progressBar.style.width = '100%';
+      progressPct.textContent = '100%';
+      progressText.textContent = `完成: ${successCount} 成功, ${total - successCount} 失败`;
+
+      if (wStream) {
+        resultEl.innerHTML = `<p style="color:#4ade80">✓ 已保存 ${successCount} 个文件到本地</p>`;
+      } else if (successCount > 0) {
+        const blob = new Blob(chunks, { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        resultEl.innerHTML = `
+          <p style="color:#4ade80">✓ 转换完成: ${successCount}/${total}</p>
+          <p><a href="${url}" download="converted_tifs.zip" style="font-size:16px">⬇ 下载 ZIP (${fmtSize(blob.size)})</a></p>
         `;
-        setProgress(100, '完成，准备下载。');
+      } else {
+        resultEl.innerHTML = '<p style="color:#f87171">转换失败，请检查 BMP 文件是否有效</p>';
       }
 
-      const log = document.createElement('pre');
-      log.textContent = reportLines.join('\n');
-      result.appendChild(log);
+      resultEl.innerHTML += `<div class="log">${logLines.join('\n')}</div>`;
+      btnConvert.disabled = false;
+    };
 
-      convertBtn.disabled = false;
-      fileInput.disabled = false;
-    });
+    // JPEG TIF builder (separate because JPEG in TIF uses different tags)
+    function buildTIF_JPEG(width, height, rgba, opts, jpegData) {
+      const { pixelOrder } = opts;
+      // For JPEG in TIFF, we still use raw pixel data arrangement
+      // Actually JPEG-in-TIFF is tricky. Let's just store the JPEG data as-is.
+      // TIFF with JPEG compression (tag 7) uses the JPEG interchange format
+
+      const dataOff = 8 + 2 + 13 * 12 + 4;
+      const buf = new Uint8Array(dataOff + jpegData.length + 16); // extra for overflow
+
+      buf[0] = 0x49; buf[1] = 0x49;
+      tifPutLE(buf, 2, 42, 2);
+      tifPutLE(buf, 4, 8, 4);
+
+      let pos = 8;
+      tifPutLE(buf, pos, 13, 2); pos += 2;
+
+      const tags = [
+        [256, 4, 1, width],
+        [257, 4, 1, height],
+        [258, 3, 4, 0],           // BitsPerSample overflow
+        [259, 3, 1, 7],           // JPEG compression
+        [262, 3, 1, 6],           // YCbCr
+        [273, 4, 1, dataOff],     // StripOffsets
+        [277, 3, 1, 3],           // SamplesPerPixel = 3 (JPEG)
+        [278, 4, 1, height],
+        [279, 4, 1, jpegData.length],
+        [282, 5, 1, 0],           // XResolution overflow
+        [283, 5, 1, 0],           // YResolution overflow
+        [284, 3, 1, pixelOrder === 'perchannel' ? 2 : 1],
+        [296, 3, 1, 2],           // ResolutionUnit = inch
+      ];
+
+      let overflow = dataOff + jpegData.length;
+      const overflowData = [];
+      const bpsOff = overflow;
+      for (const v of [8, 8, 8]) {
+        overflowData.push(v & 0xFF, (v >> 8) & 0xFF);
+        overflow += 2;
+      }
+      const xrOff = overflow;
+      overflowData.push(72, 0, 0, 0, 1, 0, 0, 0);
+      overflow += 8;
+      const yrOff = overflow;
+      overflowData.push(72, 0, 0, 0, 1, 0, 0, 0);
+      overflow += 8;
+
+      tags[2][3] = bpsOff;
+      tags[9][3] = xrOff;
+      tags[10][3] = yrOff;
+
+      for (const [tag, type, count, value] of tags) {
+        tifPutLE(buf, pos, tag, 2);
+        tifPutLE(buf, pos + 2, type, 2);
+        tifPutLE(buf, pos + 4, count, 4);
+        if (type === 3 && count === 1 && value < 0x10000) {
+          tifPutLE(buf, pos + 8, value, 2);
+          tifPutLE(buf, pos + 10, 0, 2);
+        } else if (type === 4 && count === 1) {
+          tifPutLE(buf, pos + 8, value, 4);
+        } else {
+          tifPutLE(buf, pos + 8, value, 4);
+        }
+        pos += 12;
+      }
+      tifPutLE(buf, pos, 0, 4);
+
+      buf.set(jpegData, dataOff);
+      if (overflowData.length) buf.set(new Uint8Array(overflowData), dataOff + jpegData.length);
+
+      return buf.buffer;
+    }
+
+    // Pako reference - loaded from CDN but accessed via global
+    // We need it for Deflate. It's loaded as script tag at top.
+    // Access via global pako
+    function pako_deflate(data) {
+      if (typeof pako !== 'undefined') return pako.deflate(data);
+      // Fallback: no compression
+      return data;
+    }
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 </body>
 </html>
