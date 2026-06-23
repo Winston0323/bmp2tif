@@ -247,38 +247,47 @@
       for (let i = 0; i < bytes; i++) { buf[off + i] = (val >> (i * 8)) & 0xFF; }
     }
 
-    function buildTIF(width, height, rgba, opts) {
+    function buildTIF(width, height, rgba, opts, onProgress) {
       const { comp, pixelOrder } = opts;
       const totalPx = width * height;
+      const report = (pct) => { if (onProgress) onProgress(pct); };
 
       // Rearrange pixel data if needed
       let raw;
       if (pixelOrder === 'perchannel') {
+        report(5);
         raw = new Uint8Array(totalPx * 4);
+        let lastReport = 0;
         for (let i = 0; i < totalPx; i++) {
-          raw[i] = rgba[i * 4];                   // R
-          raw[totalPx + i] = rgba[i * 4 + 1];     // G
-          raw[totalPx * 2 + i] = rgba[i * 4 + 2]; // B
-          raw[totalPx * 3 + i] = rgba[i * 4 + 3]; // A
+          raw[i] = rgba[i * 4];
+          raw[totalPx + i] = rgba[i * 4 + 1];
+          raw[totalPx * 2 + i] = rgba[i * 4 + 2];
+          raw[totalPx * 3 + i] = rgba[i * 4 + 3];
+          const pct = 5 + Math.round(i / totalPx * 25);
+          if (pct > lastReport) { lastReport = pct; report(pct); }
         }
       } else {
         raw = rgba;
+        report(30);
       }
 
       // Compress
       let imageData, compTag;
       if (comp === 'deflate') {
+        report(35);
         imageData = pako_deflate(raw);
-        compTag = 8; // Adobe Deflate
+        report(90);
+        compTag = 8;
       } else if (comp === 'lzw') {
-        imageData = lzwEncode(raw);
+        report(35);
+        imageData = lzwEncode(raw, (pct) => report(35 + Math.round(pct * 0.55)));
         compTag = 5;
       } else if (comp === 'jpeg') {
-        // JPEG handled separately via canvas
-        imageData = raw; // placeholder
+        imageData = raw;
         compTag = 7;
       } else {
         imageData = raw;
+        report(95);
         compTag = 1;
       }
 
@@ -372,26 +381,18 @@
     // But for workers we need it too. We'll pass data back to main thread for compression.
     // Actually, we'll do compression in main thread after getting raw pixels from workers.
 
-    // ═══════════ LZW - optimized numeric version (no strings!) ═══════════
-    function lzwEncode(data) {
-      // Use a Map with integer keys for speed
-      // Key: combine prefix and next byte into one integer
-      // Since we're compressing bytes, prefix can be represented as the code (int)
-      // We need a Map<[prefixCode, byte], newCode> but Map doesn't work with arrays as values...
-      // Use nested Map: dict[prefix][byte] = code
-      const dict = [];
-      for (let i = 0; i < 256; i++) {
-        dict[i] = {}; // not really needed for leaves, but for prefix lookup
-      }
-      // Actually, let me use a different approach: Map with key = prefixCode * 256 + byte
+    // ═══════════ LZW - optimized numeric version with progress ═══════════
+    function lzwEncode(data, onProgress) {
       const codeMap = new Map();
       let nextCode = 258;
       const CLEAR = 256, EOI = 257;
+      const dataLen = data.length;
 
       let prefix = data[0];
       const codes = [CLEAR];
+      let lastReport = 0;
 
-      for (let i = 1; i < data.length; i++) {
+      for (let i = 1; i < dataLen; i++) {
         const k = data[i];
         const key = prefix * 256 + k;
         if (codeMap.has(key)) {
@@ -408,11 +409,19 @@
           }
           prefix = k;
         }
+        // Report progress every ~1%
+        if (onProgress) {
+          const pct = Math.round(i / dataLen * 100);
+          if (pct > lastReport) { lastReport = pct; onProgress(pct / 100); }
+        }
       }
       codes.push(prefix);
       codes.push(EOI);
 
-      // Bit packing - TIFF LZW: pack MSB first, but little-endian byte order
+      // Bit packing - TIFF LZW
+      if (onProgress) onProgress(0.95);
+      const out = [];
+      let buf = 0, bits = 0;
       const out = [];
       let buf = 0, bits = 0;
       for (const code of codes) {
@@ -470,24 +479,32 @@
       // Track per-file progress
       const results = new Array(total).fill(null);
 
+      function setFileProgress(i, pct, label) {
+        const st = document.getElementById('filestatus-' + i);
+        const bar = document.getElementById('filebar-' + i);
+        const fill = document.getElementById('filefill-' + i);
+        if (st && label) { st.textContent = label; st.className = 'status'; }
+        if (bar && fill) {
+          bar.style.display = 'block';
+          fill.className = 'fill';
+          fill.style.width = Math.round(pct) + '%';
+        }
+      }
+
       function updateStatus(i, text, cls) {
         const st = document.getElementById('filestatus-' + i);
         const bar = document.getElementById('filebar-' + i);
         const fill = document.getElementById('filefill-' + i);
         if (st) { st.textContent = text; st.className = 'status ' + (cls || ''); }
         if (bar && fill) {
+          bar.style.display = 'block';
           if (cls === 'status-ok') {
-            bar.style.display = 'block';
             fill.className = 'fill done';
             fill.style.width = '100%';
           } else if (cls === 'status-err') {
-            bar.style.display = 'block';
             fill.className = 'fill error';
-          } else if (text && cls !== 'status-ok' && cls !== 'status-err') {
-            // Running state (解码中..., 编码中..., etc)
-            bar.style.display = 'block';
-            fill.className = 'fill running';
-            fill.style.width = '100%';
+          } else {
+            fill.style.width = '0%';
           }
         }
       }
@@ -504,10 +521,21 @@
             if (nextIdx >= total) return;
             const i = nextIdx++;
             active++;
-            updateStatus(i, '解码中...', '');
+            setFileProgress(i, 0, '解码 0%');
+
+            // Simulate decode progress based on file size (larger = slower tick)
+            const fileSize = files[i].size;
+            const tickMs = Math.max(30, Math.min(200, fileSize / 50000));
+            let decodePct = 0;
+            const decodeTimer = setInterval(() => {
+              decodePct += 2;
+              if (decodePct >= 85) decodePct = 85;
+              setFileProgress(i, decodePct, `解码 ${decodePct}%`);
+            }, tickMs);
 
             const worker = spawnWorker();
             const timeout = setTimeout(() => {
+              clearInterval(decodeTimer);
               worker.terminate();
               updateStatus(i, '超时', 'status-err');
               results[i] = { error: '解码超时' };
@@ -516,6 +544,7 @@
 
             worker.onmessage = (e) => {
               clearTimeout(timeout);
+              clearInterval(decodeTimer);
               worker.terminate();
               const d = e.data;
               if (d.error) {
@@ -524,21 +553,21 @@
                 onDone(i);
                 return;
               }
-              updateStatus(i, '编码中...', '');
-              // Build TIF asynchronously to avoid blocking event loop
-              // (prevents other workers from timing out while main thread is busy)
+              setFileProgress(i, 50, '编码 50%');
+              // Build TIF asynchronously with real progress
               setTimeout(() => {
                 try {
                   const rgba = new Uint8Array(d.rgba);
                   let tifBuf;
                   if (comp === 'jpeg') {
                     results[i] = { jpeg: true, w: d.w, h: d.h, rgba, file: files[i] };
-                    updateStatus(i, 'JPEG压缩...', '');
+                    setFileProgress(i, 50, 'JPEG压缩...');
                   } else {
-                    tifBuf = buildTIF(d.w, d.h, rgba, { comp, pixelOrder });
+                    tifBuf = buildTIF(d.w, d.h, rgba, { comp, pixelOrder },
+                      (pct) => { setFileProgress(i, 50 + pct * 0.5, `编码 ${Math.round(50 + pct * 50)}%`); });
                     results[i] = { buffer: tifBuf, name: files[i].name.replace(/\.bmp$/i, '.tif') };
-                    updateStatus(i, '✓', 'status-ok');
                   }
+                  updateStatus(i, '✓', 'status-ok');
                 } catch (err) {
                   updateStatus(i, '编码失败', 'status-err');
                   results[i] = { error: err.message };
