@@ -1,19 +1,41 @@
-# BMP to TIFF 在线转换器
+# BMP → TIFF Converter
 
-这是一个纯前端静态网页应用。你可以直接打开 `index.html`，无需后端服务。
+Flutter app for batch BMP to TIFF conversion (Windows desktop + static web).
 
-## 使用方法
+## Features
 
-1. 直接打开 `index.html`：
-   - 在浏览器中打开文件，或使用本地静态服务器
-2. 拖拽 BMP 文件到页面中，或点击区域选择 BMP 文件
-3. 选择压缩模式：NONE / LZW / ZIP / JPEG
-4. 若选择 JPEG，可设置质量值 4-12（12 最好）
-5. 选择线程数，默认使用浏览器 CPU 核心数最大值
-6. 点击“开始转换”，下载生成的 `converted_tifs.zip`
+- Compression: ZIP/Deflate, LZW, None, JPEG
+- Pixel order: interleaved / per-channel
+- Optional image pyramid
+- Parallel conversion (desktop)
+- Optional rename + archive BMPs (desktop)
+- Web: pick files/folder → convert → download ZIP
 
-## 注意
+## Run
 
-- 该页面会在浏览器内将 BMP 转为 TIFF
-- 使用了 `JSZip` 生成 ZIP 包
-- 使用了 `UTIF.js` 进行 TIFF 编码
+```bash
+flutter pub get
+flutter run -d windows
+# or
+flutter run -d chrome
+```
+
+## Release build (Windows)
+
+```bash
+flutter build windows --release
+```
+
+Output: `build/windows/x64/runner/Release/bmp2tif_app.exe`
+
+## Web / GitHub Pages
+
+```bash
+flutter build web --release --base-href "/bmp2tif/"
+```
+
+Pushing to `main` runs `.github/workflows/deploy-pages.yml` and publishes to the `gh-pages` branch.
+
+Site: https://winston0323.github.io/bmp2tif/
+
+In the repo: **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages` / `/ (root)`**.
