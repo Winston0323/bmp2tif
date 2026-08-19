@@ -45,8 +45,8 @@ void main() {
     final pages = [TiffPage(width: decoded.width, height: decoded.height, rgba: rgba)];
 
     for (final comp in TiffCompression.values) {
-      bench('encodeTiff [$comp, interleaved, no pyramid]', () {
-        encodeTiff(
+      bench('encodeTiff [$comp, interleaved, no pyramid]', () async {
+        await encodeTiff(
           pages: pages,
           compression: comp,
           pixelOrder: PixelOrder.interleaved,

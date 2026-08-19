@@ -103,10 +103,6 @@ void workerMain(SendPort mainSendPort) {
 }
 
 Future<Uint8List> _convertOne(ConvertTask task, SendPort reportTo) async {
-  void progress(String phase, double pct) {
-    reportTo.send(ConvertProgress(task.id, phase, pct));
-  }
-
   final bmpBytes = task.inputBytes ??
       (task.inputPath != null
           ? await fs.readFileBytes(task.inputPath!)
@@ -118,13 +114,10 @@ Future<Uint8List> _convertOne(ConvertTask task, SendPort reportTo) async {
     pixelOrder: task.pixelOrder,
     imagePyramid: task.imagePyramid,
     jpegQuality: task.jpegQuality,
-    onProgress: progress,
   );
 
   if (task.outputPath != null && task.outputPath!.isNotEmpty) {
-    progress('write', 0.5);
     await fs.writeFileBytes(task.outputPath!, tiffBytes);
-    progress('write', 1);
   }
   return tiffBytes;
 }

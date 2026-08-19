@@ -13,16 +13,7 @@ Future<Uint8List> convertBmpToTiffBytes({
   required int jpegQuality,
   void Function(String phase, double pct)? onProgress,
 }) async {
-  String? lastPhase;
-  var lastPct = -1.0;
-  void progress(String phase, double pct) {
-    // Throttle noisy encode callbacks — UI setState is expensive on web.
-    if (phase != lastPhase || pct - lastPct >= 0.25 || pct >= 0.999) {
-      lastPhase = phase;
-      lastPct = pct;
-      onProgress?.call(phase, pct);
-    }
-  }
+  void progress(String phase, double pct) => onProgress?.call(phase, pct);
 
   progress('decode', 0);
   final decoded = img.decodeBmp(bmpBytes);
@@ -59,9 +50,7 @@ Future<Uint8List> convertBmpToTiffBytes({
       ));
       level++;
       progress('pyramid', (level / 8).clamp(0, 0.9));
-      if (level % 2 == 0) {
-        await Future<void>.delayed(Duration.zero);
-      }
+      await Future<void>.delayed(Duration.zero);
     }
   }
 
@@ -76,7 +65,8 @@ Future<Uint8List> convertBmpToTiffBytes({
     return img.encodeJpg(frame, quality: jpegQuality);
   }
 
-  final tiffBytes = encodeTiff(
+  progress('encode', 0);
+  final tiffBytes = await encodeTiff(
     pages: pages,
     compression: compression,
     pixelOrder: pixelOrder,

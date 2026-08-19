@@ -107,7 +107,6 @@ class ConversionManager {
   }) async {
     var successCount = 0;
     var failCount = 0;
-    var lastUiMs = 0;
     for (var i = 0; i < files.length; i++) {
       if (_cancelled) break;
       final f = files[i];
@@ -122,12 +121,6 @@ class ConversionManager {
           pixelOrder: options.pixelOrder,
           imagePyramid: options.imagePyramid,
           jpegQuality: options.jpegQuality,
-          onProgress: (phase, pct) {
-            final now = DateTime.now().millisecondsSinceEpoch;
-            if (now - lastUiMs < 80 && pct < 0.999) return;
-            lastUiMs = now;
-            onEvent(FileProgress(i, phase, pct));
-          },
         );
         successCount++;
         onEvent(FileFinished(

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart' as archive;
+import '../platform/deflate.dart' as deflate;
 
 import 'lzw.dart';
 
@@ -25,14 +25,22 @@ void _putLE(Uint8List buf, int off, int val, int bytes) {
   }
 }
 
-Uint8List _deflate(Uint8List data) {
-  // bestSpeed is far cheaper than default level 6 and still much smaller than raw.
-  final encoder = archive.ZLibEncoder();
-  return Uint8List.fromList(encoder.encode(data, level: archive.DeflateLevel.bestSpeed));
+/// Drop alpha — TIFF RGB is 3 bytes/pixel (25% less data to compress).
+Uint8List rgbaToRgb(Uint8List rgba) {
+  final n = rgba.length ~/ 4;
+  final out = Uint8List(n * 3);
+  var si = 0;
+  var di = 0;
+  for (var i = 0; i < n; i++) {
+    out[di++] = rgba[si++];
+    out[di++] = rgba[si++];
+    out[di++] = rgba[si++];
+    si++; // skip A
+  }
+  return out;
 }
 
 /// Encodes a JPEG-compressed RGB image using a minimal baseline encoder.
-/// We rely on package:image for the actual JPEG bitstream.
 typedef JpegEncoderFn = Uint8List Function(int width, int height, Uint8List rgba);
 
 class _RawCompressed {
@@ -41,39 +49,50 @@ class _RawCompressed {
   final List<Uint8List> strips;
   final int compTag;
   final bool planar;
+  final int samples;
 
-  _RawCompressed(this.width, this.height, this.strips, this.compTag, this.planar);
+  _RawCompressed(
+    this.width,
+    this.height,
+    this.strips,
+    this.compTag,
+    this.planar,
+    this.samples,
+  );
 }
 
-_RawCompressed _compressRawPage(TiffPage page, TiffCompression compression, PixelOrder pixelOrder) {
+Future<_RawCompressed> _compressRawPage(
+  TiffPage page,
+  TiffCompression compression,
+  PixelOrder pixelOrder,
+) async {
   final planar = pixelOrder == PixelOrder.perChannel;
   final totalPx = page.width * page.height;
+  const samples = 3;
 
-  List<Uint8List> planes;
+  late final List<Uint8List> planes;
   if (planar) {
     final r = Uint8List(totalPx);
     final g = Uint8List(totalPx);
     final b = Uint8List(totalPx);
-    final a = Uint8List(totalPx);
     final src = page.rgba;
     for (var i = 0; i < totalPx; i++) {
       final o = i * 4;
       r[i] = src[o];
       g[i] = src[o + 1];
       b[i] = src[o + 2];
-      a[i] = src[o + 3];
     }
-    planes = [r, g, b, a];
+    planes = [r, g, b];
   } else {
-    planes = [page.rgba];
+    planes = [rgbaToRgb(page.rgba)];
   }
 
   var compTag = 1;
-  Uint8List compressOne(Uint8List bytes) {
+  Future<Uint8List> compressOne(Uint8List bytes) async {
     switch (compression) {
       case TiffCompression.zip:
         compTag = 8;
-        return _deflate(bytes);
+        return deflate.zlibDeflate(bytes);
       case TiffCompression.lzw:
         compTag = 5;
         return lzwEncode(bytes);
@@ -84,12 +103,15 @@ _RawCompressed _compressRawPage(TiffPage page, TiffCompression compression, Pixe
     }
   }
 
-  final strips = planes.map(compressOne).toList(growable: false);
-  return _RawCompressed(page.width, page.height, strips, compTag, planar);
+  final strips = <Uint8List>[];
+  for (final p in planes) {
+    strips.add(await compressOne(p));
+  }
+  return _RawCompressed(page.width, page.height, strips, compTag, planar, samples);
 }
 
 class _RawLayout {
-  final int tagCount = 13;
+  late final int tagCount;
   late final int localDataOff;
   late final int stripCount;
   late final bool inlineStrips;
@@ -101,8 +123,12 @@ class _RawLayout {
   late final int xrOff;
   late final int yrOff;
   late final int totalLength;
+  late final int samples;
 
   _RawLayout(_RawCompressed r) {
+    samples = r.samples;
+    // No ExtraSamples when writing RGB-only.
+    tagCount = 12;
     localDataOff = 2 + tagCount * 12 + 4;
     stripCount = r.strips.length;
     inlineStrips = stripCount == 1;
@@ -118,7 +144,7 @@ class _RawLayout {
 
     var overflow = localDataOff + totalImageBytes;
     bpsOff = overflow;
-    overflow += 8;
+    overflow += samples * 2;
     stripOffOff = overflow;
     if (!inlineStrips) overflow += stripCount * 4;
     stripCntOff = overflow;
@@ -131,9 +157,6 @@ class _RawLayout {
   }
 }
 
-/// Builds one page's IFD+data block. [baseOffset] is this block's absolute
-/// position in the final file; [nextIfdAbsOrZero] is the absolute offset of
-/// the next page's IFD (0 if this is the last page).
 Uint8List _writeRawBlock(_RawCompressed r, _RawLayout l, int baseOffset, int nextIfdAbsOrZero) {
   final buf = Uint8List(l.totalLength);
 
@@ -146,17 +169,16 @@ Uint8List _writeRawBlock(_RawCompressed r, _RawLayout l, int baseOffset, int nex
   final tags = <List<int>>[
     [256, 4, 1, r.width],
     [257, 4, 1, r.height],
-    [258, 3, 4, baseOffset + l.bpsOff],
+    [258, 3, r.samples, baseOffset + l.bpsOff],
     [259, 3, 1, r.compTag],
-    [262, 3, 1, 2],
+    [262, 3, 1, 2], // PhotometricInterpretation = RGB
     [273, 4, l.stripCount, l.inlineStrips ? inlineStripOff : baseOffset + l.stripOffOff],
-    [277, 3, 1, 4],
+    [277, 3, 1, r.samples],
     [278, 4, 1, r.height],
     [279, 4, l.stripCount, l.inlineStrips ? l.stripByteCounts[0] : baseOffset + l.stripCntOff],
     [282, 5, 1, baseOffset + l.xrOff],
     [283, 5, 1, baseOffset + l.yrOff],
     [284, 3, 1, r.planar ? 2 : 1],
-    [338, 3, 1, 2],
   ];
 
   for (final t in tags) {
@@ -181,10 +203,9 @@ Uint8List _writeRawBlock(_RawCompressed r, _RawLayout l, int baseOffset, int nex
     off += s.length;
   }
 
-  _putLE(buf, l.bpsOff, 8, 2);
-  _putLE(buf, l.bpsOff + 2, 8, 2);
-  _putLE(buf, l.bpsOff + 4, 8, 2);
-  _putLE(buf, l.bpsOff + 6, 8, 2);
+  for (var i = 0; i < r.samples; i++) {
+    _putLE(buf, l.bpsOff + i * 2, 8, 2);
+  }
   if (!l.inlineStrips) {
     for (var i = 0; i < l.stripCount; i++) {
       _putLE(buf, l.stripOffOff + i * 4, baseOffset + l.stripOffsetsLocal[i], 4);
@@ -238,7 +259,7 @@ Uint8List _writeJpegBlock(
   final tags = <List<int>>[
     [256, 4, 1, width],
     [257, 4, 1, height],
-    [258, 3, 4, baseOffset + l.bpsOff],
+    [258, 3, 3, baseOffset + l.bpsOff],
     [259, 3, 1, 7],
     [262, 3, 1, 6],
     [273, 4, 1, baseOffset + l.localDataOff],
@@ -279,17 +300,14 @@ Uint8List _writeJpegBlock(
   return buf;
 }
 
-/// Encodes one or more pages (first = full resolution, rest = pyramid levels,
-/// if any) into a single (possibly multi-page) TIFF file.
-///
-/// [onProgress] receives values in [0, 1].
-Uint8List encodeTiff({
+/// Encodes one or more pages into a single (possibly multi-page) TIFF file.
+Future<Uint8List> encodeTiff({
   required List<TiffPage> pages,
   required TiffCompression compression,
   required PixelOrder pixelOrder,
   required JpegEncoderFn jpegEncoder,
   void Function(double pct)? onProgress,
-}) {
+}) async {
   assert(pages.isNotEmpty);
 
   onProgress?.call(0);
@@ -297,8 +315,7 @@ Uint8List encodeTiff({
   const headerLen = 8;
   var cumulativeOffset = headerLen;
 
-  // Pass 1: compress/encode every page and compute block lengths.
-  final layouts = <Object>[]; // _RawLayout or JpegLayout paired with data
+  final layouts = <Object>[];
   final rawResults = <_RawCompressed?>[];
   final jpegResults = <Uint8List?>[];
 
@@ -310,7 +327,7 @@ Uint8List encodeTiff({
       rawResults.add(null);
       layouts.add(_JpegLayout(jpegBytes.length));
     } else {
-      final raw = _compressRawPage(page, compression, pixelOrder);
+      final raw = await _compressRawPage(page, compression, pixelOrder);
       rawResults.add(raw);
       jpegResults.add(null);
       layouts.add(_RawLayout(raw));
@@ -318,7 +335,6 @@ Uint8List encodeTiff({
     onProgress?.call((p + 1) / pages.length * 0.85);
   }
 
-  // Pass 2: compute base offsets for each block.
   final baseOffsets = <int>[];
   for (var p = 0; p < pages.length; p++) {
     baseOffsets.add(cumulativeOffset);
@@ -327,7 +343,6 @@ Uint8List encodeTiff({
     cumulativeOffset += len;
   }
 
-  // Pass 3: write blocks with correct absolute offsets + IFD chaining.
   for (var p = 0; p < pages.length; p++) {
     final nextIfd = p == pages.length - 1 ? 0 : baseOffsets[p + 1];
     final layout = layouts[p];

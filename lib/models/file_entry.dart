@@ -8,6 +8,8 @@ class FileEntry {
   final int size;
   Uint8List? bytes;
   Uint8List? outputBytes;
+  /// Small PNG preview of the BMP.
+  Uint8List? thumbPng;
   FileStatus status;
   String phase;
   double pct;

@@ -69,7 +69,7 @@ Future<void> main() async {
               }
             }
 
-            final tiffBytes = encodeTiff(
+            final tiffBytes = await encodeTiff(
               pages: pages,
               compression: compression,
               pixelOrder: pixelOrder,

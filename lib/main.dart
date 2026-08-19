@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import 'convert/conversion_manager.dart';
+import 'convert/thumb.dart';
 import 'convert/zip_bmps.dart';
 import 'models/conversion_options.dart';
 import 'models/file_entry.dart';
@@ -86,6 +87,21 @@ class _HomePageState extends State<HomePage> {
   int _completed = 0;
   int _successCount = 0;
   int _failCount = 0;
+
+  late final ThumbLoader _thumbs = ThumbLoader(
+    isPaused: () => _busy,
+    onUpdate: (batch) {
+      if (!mounted) return;
+      var changed = false;
+      for (final e in batch.entries) {
+        final file = _byPath[e.key];
+        if (file == null) continue;
+        file.thumbPng = e.value;
+        changed = true;
+      }
+      if (changed) setState(() {});
+    },
+  );
 
   bool get _busy => _isConverting || _isRenaming;
   bool get _canStart => _files.isNotEmpty && !_busy;
@@ -184,7 +200,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _addPaths(List<String> paths) {
-    var added = 0;
+    final added = <FileEntry>[];
     for (final path in paths) {
       if (!path.toLowerCase().endsWith('.bmp')) continue;
       if (_byPath.containsKey(path)) continue;
@@ -197,13 +213,16 @@ class _HomePageState extends State<HomePage> {
       final entry = FileEntry(path: path, name: p.basename(path), size: size);
       _byPath[path] = entry;
       _files.add(entry);
-      added++;
+      added.add(entry);
     }
-    if (added > 0) setState(() {});
+    if (added.isNotEmpty) {
+      setState(() {});
+      _enqueueThumbs(added);
+    }
   }
 
   void _addWebFiles(List<PlatformFile> files) {
-    var added = 0;
+    final added = <FileEntry>[];
     for (final f in files) {
       final name = f.name;
       if (!name.toLowerCase().endsWith('.bmp')) continue;
@@ -219,13 +238,16 @@ class _HomePageState extends State<HomePage> {
       );
       _byPath[key] = entry;
       _files.add(entry);
-      added++;
+      added.add(entry);
     }
-    if (added > 0) setState(() {});
+    if (added.isNotEmpty) {
+      setState(() {});
+      _enqueueThumbs(added);
+    }
   }
 
   void _addWebFolderFiles(WebFolderPickResult picked) {
-    var added = 0;
+    final added = <FileEntry>[];
     for (final f in picked.files) {
       final key = 'web://${picked.folderName}/${f.relativePath}';
       if (_byPath.containsKey(key)) continue;
@@ -237,9 +259,24 @@ class _HomePageState extends State<HomePage> {
       );
       _byPath[key] = entry;
       _files.add(entry);
-      added++;
+      added.add(entry);
     }
-    if (added > 0) setState(() {});
+    if (added.isNotEmpty) {
+      setState(() {});
+      _enqueueThumbs(added);
+    }
+  }
+
+  void _enqueueThumbs(List<FileEntry> entries) {
+    for (final e in entries) {
+      if (e.thumbPng != null) continue;
+      final path = e.path;
+      final cached = e.bytes;
+      _thumbs.enqueue(path, () async {
+        if (cached != null) return cached;
+        return fs.readFileBytes(path);
+      });
+    }
   }
 
   Future<void> _onDragDone(DropDoneDetails details) async {
@@ -295,6 +332,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _clearFiles() {
+    _thumbs.clear();
     setState(() {
       _files.clear();
       _byPath.clear();
@@ -454,7 +492,6 @@ class _HomePageState extends State<HomePage> {
 
     final outputs = <String, Uint8List>{};
     var successCount = 0;
-    var lastProgressUiMs = 0;
     await manager.run(
       files: tasks,
       options: options,
@@ -462,24 +499,19 @@ class _HomePageState extends State<HomePage> {
         if (!mounted) return;
         if (event is FileStarted) {
           setState(() {
-            _files[event.index].status = FileStatus.running;
-            _files[event.index].phase = 'decode';
-            _files[event.index].pct = 0;
+            final e = _files[event.index];
+            e.status = FileStatus.running;
+            e.phase = 'Converting';
           });
         } else if (event is FileProgress) {
-          final now = DateTime.now().millisecondsSinceEpoch;
-          if (now - lastProgressUiMs < 80 && event.pct < 0.999) return;
-          lastProgressUiMs = now;
-          setState(() {
-            _files[event.index].phase = _phaseLabel(event.phase);
-            _files[event.index].pct = event.pct;
-          });
+          // Skip per-file progress updates — overall bar is enough and keeps convert fast.
         } else if (event is FileFinished) {
           setState(() {
             _completed++;
             final e = _files[event.index];
             e.status = event.ok ? FileStatus.done : FileStatus.error;
-            e.pct = 1;
+            e.pct = event.ok ? 1 : e.pct;
+            e.phase = event.ok ? 'Converted' : 'Failed';
             e.error = event.error;
             e.elapsedMs = event.elapsedMs;
             e.outputBytes = event.outputBytes;
@@ -601,21 +633,6 @@ class _HomePageState extends State<HomePage> {
     _appendLog('Cancelling... (will stop after the current file finishes)');
   }
 
-  String _phaseLabel(String phase) {
-    switch (phase) {
-      case 'decode':
-        return 'Decode';
-      case 'pyramid':
-        return 'Pyramid';
-      case 'encode':
-        return 'Encode';
-      case 'write':
-        return 'Write';
-      default:
-        return phase;
-    }
-  }
-
   String _compressionLabel(TiffCompression c) {
     switch (c) {
       case TiffCompression.none:
@@ -637,6 +654,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _thumbs.dispose();
     _manager?.dispose();
     _renamePrefixCtrl.dispose();
     super.dispose();
@@ -1272,70 +1290,104 @@ class _HomePageState extends State<HomePage> {
 
   Widget _fileRow(int index) {
     final f = _files[index];
-    Color statusColor;
-    String statusText;
+    final Color statusColor;
+    final String statusText;
+    final IconData statusIcon;
     switch (f.status) {
       case FileStatus.queued:
         statusColor = AppTheme.textMuted;
-        statusText = 'Queued';
+        statusText = _busy ? 'Waiting' : 'Ready';
+        statusIcon = Icons.schedule;
         break;
       case FileStatus.running:
         statusColor = AppTheme.accent;
-        statusText = '${f.phase} ${(f.pct * 100).round()}%';
+        statusText = 'Converting';
+        statusIcon = Icons.hourglass_top;
         break;
       case FileStatus.done:
         statusColor = AppTheme.success;
-        statusText = 'Done';
+        statusText = 'Converted';
+        statusIcon = Icons.check_circle;
         break;
       case FileStatus.error:
         statusColor = AppTheme.danger;
-        statusText = f.error ?? 'Failed';
+        statusText = 'Failed';
+        statusIcon = Icons.error_outline;
         break;
     }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
         decoration: BoxDecoration(
           color: AppTheme.panelElevated.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: AppTheme.border),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(f.name,
-                      overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
-                ),
-                const SizedBox(width: 8),
-                Text(_fmtSize(f.size), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                const SizedBox(width: 8),
-                Text(statusText, style: TextStyle(color: statusColor, fontSize: 12), overflow: TextOverflow.ellipsis),
-                if (!_busy)
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: () => _removeFile(index),
-                    icon: const Icon(Icons.close, size: 16, color: AppTheme.danger),
-                  ),
-              ],
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: f.thumbPng != null
+                    ? Image.memory(
+                        f.thumbPng!,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                      )
+                    : ColoredBox(
+                        color: AppTheme.surfaceInput,
+                        child: Icon(
+                          Icons.image_outlined,
+                          size: 22,
+                          color: AppTheme.textDim,
+                        ),
+                      ),
+              ),
             ),
-            if (f.status == FileStatus.running || f.status == FileStatus.done) ...[
-              const SizedBox(height: 6),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(2),
-                child: LinearProgressIndicator(
-                  value: f.pct,
-                  minHeight: 4,
-                  backgroundColor: AppTheme.border,
-                  valueColor: AlwaysStoppedAnimation(f.status == FileStatus.done ? AppTheme.success : AppTheme.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    f.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _fmtSize(f.size),
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(statusIcon, size: 16, color: statusColor),
+            const SizedBox(width: 4),
+            Text(
+              statusText,
+              style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w500),
+            ),
+            if (f.status == FileStatus.error && f.error != null)
+              Tooltip(
+                message: f.error!,
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 4),
+                  child: Icon(Icons.info_outline, size: 14, color: AppTheme.textMuted),
                 ),
               ),
-            ],
+            if (!_busy)
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: () => _removeFile(index),
+                icon: const Icon(Icons.close, size: 16, color: AppTheme.danger),
+              ),
           ],
         ),
       ),
