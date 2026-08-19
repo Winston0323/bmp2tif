@@ -12,8 +12,10 @@ import 'convert/zip_bmps.dart';
 import 'models/conversion_options.dart';
 import 'models/file_entry.dart';
 import 'platform/download.dart';
+import 'platform/env.dart';
 import 'platform/folder_pick.dart';
 import 'platform/fs.dart' as fs;
+import 'platform/permissions.dart';
 import 'rename/rename.dart';
 import 'theme/app_theme.dart';
 import 'tiff/tiff_writer.dart';
@@ -114,7 +116,24 @@ class _HomePageState extends State<HomePage> {
     return '$y$m$d';
   }
 
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  Future<bool> _ensureAndroidStorage({required String why}) async {
+    if (!isAndroid) return true;
+    final ok = await ensureStorageAccess();
+    if (!ok) {
+      _showMessage('Storage permission required to $why. Enable "All files access" for BMP to TIFF.');
+    }
+    return ok;
+  }
+
   Future<void> _pickFiles() async {
+    if (!await _ensureAndroidStorage(why: 'read BMP files')) return;
     final result = await FilePicker.pickFiles(
       allowMultiple: true,
       type: FileType.custom,
@@ -152,6 +171,7 @@ class _HomePageState extends State<HomePage> {
       }
       return;
     }
+    if (!await _ensureAndroidStorage(why: 'open folders')) return;
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Select a folder containing BMP files');
     if (dir == null) return;
     final found = await fs.listBmpFilesRecursive(dir);
@@ -163,10 +183,12 @@ class _HomePageState extends State<HomePage> {
     _addPaths(found);
     if (found.isEmpty) {
       _appendLog('No BMP files found in $dir');
+      _showMessage('No BMP files found in that folder');
     }
   }
 
   Future<void> _pickOutputDir() async {
+    if (!await _ensureAndroidStorage(why: 'choose an output folder')) return;
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Select output folder');
     if (dir == null) return;
     setState(() {
@@ -426,6 +448,8 @@ class _HomePageState extends State<HomePage> {
   Future<void> _startConversion() async {
     if (_files.isEmpty || _busy) return;
 
+    if (!await _ensureAndroidStorage(why: 'convert and save TIFF files')) return;
+
     if (!kIsWeb && _renameBeforeConvert) {
       final ok = await _renameListedFiles();
       if (!ok) return;
@@ -669,7 +693,8 @@ class _HomePageState extends State<HomePage> {
       backgroundColor: Colors.transparent,
       body: DecoratedBox(
         decoration: AppTheme.scaffoldBackdrop(),
-        child: Padding(
+        child: SafeArea(
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -678,11 +703,11 @@ class _HomePageState extends State<HomePage> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'BMP \u2192 TIFF',
                           style: TextStyle(
                             fontSize: 22,
@@ -690,10 +715,12 @@ class _HomePageState extends State<HomePage> {
                             color: AppTheme.textPrimary,
                           ),
                         ),
-                        SizedBox(height: 2),
+                        const SizedBox(height: 2),
                         Text(
-                          'Select BMP files, set options, then convert. Rename and ZIP are optional.',
-                          style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                          isMobile
+                              ? 'Pick BMP files or a folder, set options, then convert.'
+                              : 'Select BMP files, set options, then convert. Rename and ZIP are optional.',
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
                         ),
                       ],
                     ),
@@ -715,27 +742,41 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 12),
 
-              // Main: Files (left) + Settings (right)
+              // Main: Files + Settings (side-by-side on wide, stacked on phone)
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(flex: 5, child: _buildFilesPanel(totalSize)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 4,
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _buildOptionsPanel(),
-                            const SizedBox(height: 10),
-                            _buildOutputPanel(),
-                          ],
-                        ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final narrow = constraints.maxWidth < 720 || isMobile;
+                    final files = _buildFilesPanel(totalSize);
+                    final settings = SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildOptionsPanel(),
+                          const SizedBox(height: 10),
+                          _buildOutputPanel(),
+                        ],
                       ),
-                    ),
-                  ],
+                    );
+                    if (narrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(flex: 5, child: files),
+                          const SizedBox(height: 10),
+                          Expanded(flex: 6, child: settings),
+                        ],
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(flex: 5, child: files),
+                        const SizedBox(width: 12),
+                        Expanded(flex: 4, child: settings),
+                      ],
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 10),
@@ -743,6 +784,7 @@ class _HomePageState extends State<HomePage> {
               // Action bar: start + progress (full width)
               _buildActionBar(overallPct),
             ],
+          ),
           ),
         ),
       ),
@@ -1174,14 +1216,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildFilesPanel(int totalSize) {
-    return DropTarget(
-      onDragEntered: (_) => setState(() => _dragOver = true),
-      onDragExited: (_) => setState(() => _dragOver = false),
-      onDragDone: (details) {
-        setState(() => _dragOver = false);
-        _onDragDone(details);
-      },
-      child: Container(
+    final panel = Container(
         decoration: BoxDecoration(
           color: _dragOver ? AppTheme.accent.withValues(alpha: 0.08) : AppTheme.panel.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(12),
@@ -1253,23 +1288,31 @@ class _HomePageState extends State<HomePage> {
               child: _files.isEmpty
                   ? InkWell(
                       onTap: _busy ? null : _pickFolder,
-                      child: const Center(
+                      child: Center(
                         child: Padding(
-                          padding: EdgeInsets.all(16),
+                          padding: const EdgeInsets.all(16),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.download, size: 28, color: AppTheme.accent),
-                              SizedBox(height: 8),
-                              Text(
-                                'Drop BMP files / folder here',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                              Icon(
+                                isMobile ? Icons.folder_open : Icons.download,
+                                size: 28,
+                                color: AppTheme.accent,
                               ),
-                              SizedBox(height: 4),
+                              const SizedBox(height: 8),
                               Text(
-                                'or use the buttons above',
-                                style: TextStyle(color: AppTheme.textDim, fontSize: 11),
+                                isMobile
+                                    ? 'Tap to add a BMP folder'
+                                    : 'Drop BMP files / folder here',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                isMobile
+                                    ? 'or use the file / folder buttons above'
+                                    : 'or use the buttons above',
+                                style: const TextStyle(color: AppTheme.textDim, fontSize: 11),
                               ),
                             ],
                           ),
@@ -1284,7 +1327,18 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-      ),
+      );
+
+    if (isMobile) return panel;
+
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragOver = true),
+      onDragExited: (_) => setState(() => _dragOver = false),
+      onDragDone: (details) {
+        setState(() => _dragOver = false);
+        _onDragDone(details);
+      },
+      child: panel,
     );
   }
 

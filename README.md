@@ -1,14 +1,14 @@
 # BMP → TIFF Converter
 
-Flutter app for batch BMP to TIFF conversion (Windows desktop + static web).
+Flutter app for batch BMP to TIFF conversion (Windows desktop, Android, and static web).
 
 ## Features
 
 - Compression: ZIP/Deflate, LZW, None, JPEG
 - Pixel order: interleaved / per-channel
 - Optional image pyramid
-- Parallel conversion (desktop)
-- Optional rename + archive BMPs (desktop)
+- Parallel conversion (desktop / Android)
+- Optional rename + archive BMPs (desktop / Android)
 - Web: pick files/folder → convert → download ZIP
 
 ## Run
@@ -18,6 +18,8 @@ flutter pub get
 flutter run -d windows
 # or
 flutter run -d chrome
+# or (USB debugging / emulator)
+flutter run -d android
 ```
 
 ## Release build (Windows)
@@ -27,6 +29,16 @@ flutter build windows --release
 ```
 
 Output: `build/windows/x64/runner/Release/bmp2tif_app.exe`
+
+## Release build (Android)
+
+```bash
+flutter build apk --release
+```
+
+Output: `build/app/outputs/flutter-apk/app-release.apk`
+
+On first use, grant **All files access** so the app can read BMP folders and write TIFFs (same workflow as desktop).
 
 ## Web / GitHub Pages
 
