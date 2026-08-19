@@ -1206,13 +1206,16 @@ class _HomePageState extends State<HomePage> {
                     onPressed: _busy ? null : _pickFolder,
                     icon: const Icon(Icons.folder_open_outlined, size: 18),
                   ),
-                  IconButton(
-                    tooltip: 'Clear',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  const SizedBox(width: 4),
+                  OutlinedButton(
                     onPressed: _busy || _files.isEmpty ? null : _clearFiles,
-                    icon: const Icon(Icons.clear_all, size: 18),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      minimumSize: const Size(0, 32),
+                      visualDensity: VisualDensity.compact,
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    child: const Text('Clear files'),
                   ),
                 ],
               ),
