@@ -1,0 +1,44 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="BMP to TIFF Converter"
+      Manufacturer="bmp2tif"
+      Version="1.0.0"
+      UpgradeCode="8F3C1A2E-6B47-4D91-9E20-C4B8A7F5D016"
+      Language="1033"
+      Scope="perMachine">
+    <SummaryInformation Description="Batch BMP to TIFF converter" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of BMP to TIFF Converter is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="!(bindpath.payload)\bmp2tif_app.exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Bmp2Tif" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut
+            Id="AppMenuShortcut"
+            Name="BMP to TIFF"
+            Description="Convert BMP images to TIFF"
+            Target="[INSTALLFOLDER]bmp2tif_app.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveProgramMenu" On="uninstall" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\bmp2tif\Bmp2Tif"
+            Name="InstallDir"
+            Type="string"
+            Value="[INSTALLFOLDER]"
+            KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="BMP to TIFF Converter" Level="1">
+      <ComponentRef Id="StartMenuShortcut" />
+      <Files Directory="INSTALLFOLDER" Include="!(bindpath.payload)\**" />
+    </Feature>
+  </Package>
+</Wix>

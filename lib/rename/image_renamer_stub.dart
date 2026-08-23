@@ -29,9 +29,14 @@ class RenameResult {
 RenameResult renameImagesOrdered({
   required List<String> paths,
   required String prefix,
+  bool renameFiles = true,
   bool renameFolders = true,
+  String? rootFolder,
 }) {
   throw UnsupportedError('Rename on disk is not available on web');
 }
 
-List<String> listImagesInDir(String dir) => const [];
+List<String> listImagesInDir(String dir, {bool recursive = false}) => const [];
+
+String remapPathAfterFolderRenames(String path, List<RenamePair> folderRenames) =>
+    path;

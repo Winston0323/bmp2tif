@@ -30,6 +30,27 @@ flutter build windows --release
 
 Output: `build/windows/x64/runner/Release/bmp2tif_app.exe`
 
+## Windows installer (MSI)
+
+Requires [WiX Toolset CLI](https://wixtoolset.org/) (`winget install --id WiXToolset.WiXCLI -e`).
+
+```bash
+powershell -File tool/build_msi.ps1
+```
+
+Output: `dist/Bmp2Tif.msi`
+
+The script rebuilds the Flutter Windows release first. Pass `-SkipFlutter` if that build is already current.
+
+## Rebuild GUI (Windows / Android / Web / MSI)
+
+```bash
+python tool/rebuild_gui.py
+```
+
+Or double-click `tool/rebuild_gui.bat`. Check the targets you want, then **Build selected**.
+
+
 ## Release build (Android)
 
 ```bash

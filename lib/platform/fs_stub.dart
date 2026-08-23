@@ -17,3 +17,11 @@ int fileLengthSync(String path) => 0;
 Future<void> deleteFile(String path) async {}
 
 bool fileExistsSync(String path) => false;
+
+bool directoryExistsSync(String path) => false;
+
+Future<void> createDirectory(String path) async {}
+
+Future<void> openDirectory(String path) async {
+  throw UnsupportedError('Open folder is not available on web');
+}

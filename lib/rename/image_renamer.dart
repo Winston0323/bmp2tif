@@ -94,12 +94,13 @@ String sanitizePrefix(String raw) {
   return s;
 }
 
-/// Lists image files directly under [dir] (non-recursive), sorted naturally.
-List<String> listImagesInDir(String dir) {
+/// Lists image files under [dir], sorted naturally.
+/// When [recursive] is true, includes images in nested folders.
+List<String> listImagesInDir(String dir, {bool recursive = false}) {
   final d = Directory(dir);
   if (!d.existsSync()) return [];
   final files = d
-      .listSync(followLinks: false)
+      .listSync(recursive: recursive, followLinks: false)
       .whereType<File>()
       .map((f) => f.path)
       .where(isImagePath)
@@ -181,98 +182,116 @@ String remapPathAfterFolderRenames(String path, List<RenamePair> folderRenames) 
 ///
 /// Uses a two-pass rename via unique temp names so files never overwrite each
 /// other when the destination name already exists in the same folder.
+///
+/// [rootFolder] is the folder the user picked. When [renameFolders] is true
+/// that folder is renamed to [prefix]. Nested folder names are left as-is.
 RenameResult renameImagesOrdered({
   required List<String> paths,
   required String prefix,
+  bool renameFiles = true,
   bool renameFolders = true,
+  String? rootFolder,
 }) {
   final cleanPrefix = sanitizePrefix(prefix);
   if (cleanPrefix.isEmpty) {
     return const RenameResult(renamed: [], errors: ['Prefix is empty']);
   }
-  if (paths.isEmpty) {
+  if (!renameFiles && !renameFolders) {
+    return const RenameResult(renamed: [], errors: ['No rename target selected']);
+  }
+  if (renameFiles && paths.isEmpty && !renameFolders) {
     return const RenameResult(renamed: [], errors: ['No images to rename']);
   }
 
-  // Group by parent directory, then sort each group naturally by name.
-  final byDir = <String, List<String>>{};
-  for (final path in paths) {
-    final dir = p.normalize(p.dirname(path));
-    byDir.putIfAbsent(dir, () => []).add(path);
-  }
-  for (final group in byDir.values) {
-    sortImagePaths(group);
-  }
-
-  // Flatten in stable directory order so logging/results are predictable.
-  final dirs = byDir.keys.toList()..sort();
-  final ordered = <String>[];
-  for (final dir in dirs) {
-    ordered.addAll(byDir[dir]!);
-  }
-
-  final total = ordered.length;
   final errors = <String>[];
-  final tempPaths = <String?>[];
-  final stamp = DateTime.now().microsecondsSinceEpoch;
-
-  // Pass 1: move everything to unique temp names in the same directory.
-  for (var i = 0; i < total; i++) {
-    final from = ordered[i];
-    final dir = p.dirname(from);
-    final ext = p.extension(from);
-    final temp = p.join(dir, '__bmp2tif_rename_${stamp}_$i$ext');
-    try {
-      File(from).renameSync(temp);
-      tempPaths.add(temp);
-    } catch (e) {
-      errors.add('${p.basename(from)}: $e');
-      tempPaths.add(null);
-    }
-  }
-
-  // Pass 2: assign sequential indices per folder by file count (1..N),
-  // not by anything read from the old name.
   final renamed = <RenamePair>[];
-  final perDirCount = <String, int>{};
-  final perDirTotal = <String, int>{
-    for (final e in byDir.entries) e.key: e.value.length,
-  };
 
-  for (var i = 0; i < total; i++) {
-    final temp = tempPaths[i];
-    if (temp == null) continue;
-    final dir = p.normalize(p.dirname(temp));
-    final ext = p.extension(temp);
-    final seq = (perDirCount[dir] ?? 0) + 1;
-    perDirCount[dir] = seq;
-    final folderTotal = perDirTotal[dir] ?? total;
-    final index = formatOrderIndex(seq, folderTotal);
-    var dest = p.join(dir, '${cleanPrefix}_$index$ext');
-
-    // If somehow still occupied, append a suffix rather than fail silently.
-    if (File(dest).existsSync()) {
-      dest = p.join(dir, '${cleanPrefix}_${index}_$stamp$ext');
+  if (renameFiles && paths.isNotEmpty) {
+    // Group by parent directory, then sort each group naturally by name.
+    final byDir = <String, List<String>>{};
+    for (final path in paths) {
+      final dir = p.normalize(p.dirname(path));
+      byDir.putIfAbsent(dir, () => []).add(path);
+    }
+    for (final group in byDir.values) {
+      sortImagePaths(group);
     }
 
-    try {
-      File(temp).renameSync(dest);
-      renamed.add(RenamePair(ordered[i], dest));
-    } catch (e) {
-      errors.add('${p.basename(ordered[i])} -> ${p.basename(dest)}: $e');
-      // Best effort: try to restore original name from temp.
+    // Flatten in stable directory order so logging/results are predictable.
+    final dirs = byDir.keys.toList()..sort();
+    final ordered = <String>[];
+    for (final dir in dirs) {
+      ordered.addAll(byDir[dir]!);
+    }
+
+    final total = ordered.length;
+    final tempPaths = <String?>[];
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+
+    // Pass 1: move everything to unique temp names in the same directory.
+    for (var i = 0; i < total; i++) {
+      final from = ordered[i];
+      final dir = p.dirname(from);
+      final ext = p.extension(from);
+      final temp = p.join(dir, '__bmp2tif_rename_${stamp}_$i$ext');
       try {
-        File(temp).renameSync(ordered[i]);
-      } catch (_) {}
+        File(from).renameSync(temp);
+        tempPaths.add(temp);
+      } catch (e) {
+        errors.add('${p.basename(from)}: $e');
+        tempPaths.add(null);
+      }
+    }
+
+    // Pass 2: assign sequential indices per folder by file count (1..N),
+    // not by anything read from the old name.
+    final perDirCount = <String, int>{};
+    final perDirTotal = <String, int>{
+      for (final e in byDir.entries) e.key: e.value.length,
+    };
+
+    for (var i = 0; i < total; i++) {
+      final temp = tempPaths[i];
+      if (temp == null) continue;
+      final dir = p.normalize(p.dirname(temp));
+      final ext = p.extension(temp);
+      final seq = (perDirCount[dir] ?? 0) + 1;
+      perDirCount[dir] = seq;
+      final folderTotal = perDirTotal[dir] ?? total;
+      final index = formatOrderIndex(seq, folderTotal);
+      var dest = p.join(dir, '${cleanPrefix}_$index$ext');
+
+      // If somehow still occupied, append a suffix rather than fail silently.
+      if (File(dest).existsSync()) {
+        dest = p.join(dir, '${cleanPrefix}_${index}_$stamp$ext');
+      }
+
+      try {
+        File(temp).renameSync(dest);
+        renamed.add(RenamePair(ordered[i], dest));
+      } catch (e) {
+        errors.add('${p.basename(ordered[i])} -> ${p.basename(dest)}: $e');
+        // Best effort: try to restore original name from temp.
+        try {
+          File(temp).renameSync(ordered[i]);
+        } catch (_) {}
+      }
     }
   }
 
-  // Pass 3: rename each unique parent folder to the prefix.
+  // Pass 3: rename the picked folder (and nested parent folders of files
+  // when no explicit root was given).
   final renamedFolders = <RenamePair>[];
-  if (renameFolders && renamed.isNotEmpty) {
-    final folderDirs = renamed.map((r) => p.normalize(p.dirname(r.to))).toSet().toList()
-      ..sort();
-    for (final dir in folderDirs) {
+  if (renameFolders) {
+    final folderDirs = <String>{};
+    if (rootFolder != null && rootFolder.isNotEmpty) {
+      folderDirs.add(p.normalize(rootFolder));
+    } else {
+      folderDirs.addAll(renamed.map((r) => p.normalize(p.dirname(r.to))));
+    }
+    final sortedDirs = folderDirs.toList()
+      ..sort((a, b) => b.length.compareTo(a.length)); // deepest first
+    for (final dir in sortedDirs) {
       final pair = renameFolderToPrefix(dir: dir, prefix: cleanPrefix, errors: errors);
       if (pair != null) {
         renamedFolders.add(pair);
@@ -290,6 +309,10 @@ RenameResult renameImagesOrdered({
     }
   }
 
+  if (renamed.isEmpty && renamedFolders.isEmpty && errors.isEmpty) {
+    return const RenameResult(renamed: [], errors: []);
+  }
+
   return RenameResult(renamed: renamed, renamedFolders: renamedFolders, errors: errors);
 }
 
@@ -298,11 +321,15 @@ RenameResult renameImagesOrdered({
 RenameResult renameImagesInDirectory({
   required String dir,
   required String prefix,
+  bool renameFiles = true,
   bool renameFolders = true,
+  bool recursive = false,
 }) {
   return renameImagesOrdered(
-    paths: listImagesInDir(dir),
+    paths: renameFiles ? listImagesInDir(dir, recursive: recursive) : const [],
     prefix: prefix,
+    renameFiles: renameFiles,
     renameFolders: renameFolders,
+    rootFolder: dir,
   );
 }

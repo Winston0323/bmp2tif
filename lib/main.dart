@@ -34,6 +34,19 @@ class Bmp2TifApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
       themeMode: ThemeMode.dark,
+      // Phones only: keep text comfortably readable (at least 1.1x, capped at
+      // 1.35x). System font scale is still honoured. Desktop/web untouched.
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        if (!isMobile) return child;
+        final systemScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(systemScale.clamp(1.1, 1.35).toDouble()),
+          ),
+          child: child,
+        );
+      },
       home: const HomePage(),
     );
   }
@@ -77,12 +90,15 @@ class _HomePageState extends State<HomePage> {
   /// `converting` | `archiving` | `deleting` while a job is running.
   String? _jobPhase;
 
-  // Rename: optional step before BMP->TIFF.
-  bool _renameBeforeConvert = true;
+  // Rename: independent of convert. Triggered only by Rename Only.
+  bool _renameImages = true;
   bool _renameFolderToo = true;
   late final TextEditingController _renamePrefixCtrl = TextEditingController(
     text: _defaultRenamePrefix(),
   );
+  late final TextEditingController _outputDirCtrl = TextEditingController();
+  String _panelStatus = '';
+  bool _panelStatusError = false;
 
   ConversionManager? _manager;
   int _total = 0;
@@ -107,6 +123,52 @@ class _HomePageState extends State<HomePage> {
 
   bool get _busy => _isConverting || _isRenaming;
   bool get _canStart => _files.isNotEmpty && !_busy;
+  bool get _canRenameNow {
+    if (kIsWeb || _busy) return false;
+    if (sanitizePrefix(_renamePrefixCtrl.text).isEmpty) return false;
+    if (!_renameImages && !_renameFolderToo) return false;
+    if (_renameFolderToo && _inputFolder == null && _files.isEmpty) return false;
+    if (_renameImages && _files.isEmpty && _inputFolder == null) return false;
+    return _inputFolder != null || _files.isNotEmpty;
+  }
+
+  String get _typedOutputDir => _outputDirCtrl.text.trim();
+
+  bool get _outputFolderExists {
+    if (kIsWeb) return false;
+    final path = _typedOutputDir;
+    return path.isNotEmpty && fs.directoryExistsSync(path);
+  }
+
+  bool get _outputFolderNeedsCreate {
+    if (kIsWeb) return false;
+    final path = _typedOutputDir;
+    return path.isNotEmpty && !fs.directoryExistsSync(path);
+  }
+
+  void _setPanelStatus(String message, {bool error = false}) {
+    if (!mounted) return;
+    setState(() {
+      _panelStatus = message;
+      _panelStatusError = error;
+    });
+  }
+
+  void _writeOutputCtrl(String? dir) {
+    final text = dir ?? '';
+    if (_outputDirCtrl.text == text) return;
+    _outputDirCtrl.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _setOutputDir(String? dir, {required bool custom}) {
+    final cleaned = (dir == null || dir.trim().isEmpty) ? null : dir.trim();
+    _outputDir = cleaned;
+    _outputPathCustom = custom;
+    _writeOutputCtrl(cleaned);
+  }
 
   static String _defaultRenamePrefix() {
     final n = DateTime.now();
@@ -191,10 +253,25 @@ class _HomePageState extends State<HomePage> {
     if (!await _ensureAndroidStorage(why: 'choose an output folder')) return;
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Select output folder');
     if (dir == null) return;
-    setState(() {
-      _outputDir = dir;
-      _outputPathCustom = true;
-    });
+    setState(() => _setOutputDir(dir, custom: true));
+  }
+
+  Future<void> _showOutputFolder() async {
+    if (kIsWeb) return;
+    var path = _typedOutputDir;
+    if (path.isEmpty) {
+      _setPanelStatus('Set an output folder first', error: true);
+      return;
+    }
+    if (!fs.directoryExistsSync(path)) {
+      if (!await _ensureOutputFolder()) return;
+      path = _typedOutputDir;
+    }
+    try {
+      await fs.openDirectory(path);
+    } catch (e) {
+      _setPanelStatus('Could not open folder: $e', error: true);
+    }
   }
 
   String _defaultOutputFolderName() {
@@ -212,13 +289,12 @@ class _HomePageState extends State<HomePage> {
   /// Folder input sets the output path. File-only input clears it.
   void _applyInputFolder(String? dir) {
     _inputFolder = dir;
-    _outputPathCustom = false;
-    _outputDir = dir == null ? null : _autoOutputDirFor(dir);
+    _setOutputDir(dir == null ? null : _autoOutputDirFor(dir), custom: false);
   }
 
   void _syncAutoOutputDir() {
     if (_outputPathCustom || _inputFolder == null) return;
-    _outputDir = _autoOutputDirFor(_inputFolder!);
+    _setOutputDir(_autoOutputDirFor(_inputFolder!), custom: false);
   }
 
   void _addPaths(List<String> paths) {
@@ -367,69 +443,79 @@ class _HomePageState extends State<HomePage> {
     debugPrint(line);
   }
 
-  /// Renames files currently in the list (sorted by name) to prefix_index.
-  /// Returns false if rename failed hard (empty prefix / nothing to do).
+  /// Renames images/folder from the Input panel selection.
   Future<bool> _renameListedFiles() async {
     final prefix = _renamePrefixCtrl.text;
     if (sanitizePrefix(prefix).isEmpty) {
       _appendLog('Rename skipped: prefix is empty');
+      _setPanelStatus('Enter a name prefix first', error: true);
+      return false;
+    }
+    if (!_renameImages && !_renameFolderToo) {
+      _appendLog('Rename skipped: no target selected');
+      _setPanelStatus('Select Images and/or Folder as the rename target', error: true);
+      return false;
+    }
+    if (_inputFolder == null && _files.isEmpty) {
+      _setPanelStatus('Pick BMP files or a folder in Input first', error: true);
+      return false;
+    }
+    if (_renameFolderToo && _inputFolder == null && !_renameImages) {
+      _setPanelStatus('Pick a folder to rename, or also check Images', error: true);
       return false;
     }
 
-    final sorted = List<FileEntry>.from(_files)
-      ..sort((a, b) => compareBasenamesNatural(a.path, b.path));
-    final paths = sorted.map((e) => e.path).toList();
+    if (!await _ensureAndroidStorage(why: 'rename files')) return false;
+
+    final folder = _inputFolder;
+    final List<String> paths;
+    if (_renameImages) {
+      if (folder != null && !kIsWeb) {
+        paths = listImagesInDir(folder, recursive: true);
+      } else {
+        final sorted = List<FileEntry>.from(_files)
+          ..sort((a, b) => compareBasenamesNatural(a.path, b.path));
+        paths = sorted.map((e) => e.path).toList();
+      }
+    } else {
+      paths = const [];
+    }
+
+    if (_renameImages && paths.isEmpty) {
+      _setPanelStatus('No images found to rename', error: true);
+      return false;
+    }
+    if (folder != null && !kIsWeb && !fs.directoryExistsSync(folder)) {
+      _setPanelStatus('Folder not found: $folder', error: true);
+      return false;
+    }
 
     setState(() => _isRenaming = true);
-    _appendLog('Renaming ${paths.length} file(s) with prefix "${sanitizePrefix(prefix)}_"...');
+    _appendLog('Renaming with prefix "${sanitizePrefix(prefix)}_"...');
+    if (_renameImages) {
+      _appendLog('  Images: ${paths.length} file(s)${folder != null ? " (recursive)" : ""}');
+    }
     if (_renameFolderToo) {
-      _appendLog('Also renaming parent folder(s) to "${sanitizePrefix(prefix)}"');
+      _appendLog('  Folder: ${folder ?? "(parent folders)"}');
     }
 
-    final result = await Future(() => renameImagesOrdered(
-          paths: paths,
-          prefix: prefix,
-          renameFolders: _renameFolderToo,
-        ));
-
-    // Rebuild list + path map from rename results / leftovers.
-    final pathMap = <String, String>{
-      for (final pair in result.renamed) pair.from: pair.to,
-    };
-    final newFiles = <FileEntry>[];
-    final newByPath = <String, FileEntry>{};
-    for (final e in sorted) {
-      final newPath = pathMap[e.path] ?? e.path;
-      e.path = newPath;
-      e.name = p.basename(newPath);
-      newFiles.add(e);
-      newByPath[newPath] = e;
+    late final RenameResult result;
+    try {
+      result = await Future(() => renameImagesOrdered(
+            paths: paths,
+            prefix: prefix,
+            renameFiles: _renameImages,
+            renameFolders: _renameFolderToo,
+            rootFolder: folder,
+          ));
+      _applyRenameResult(result, renamedFrom: folder);
+    } catch (e) {
+      _appendLog('  FAIL  $e');
+      _setPanelStatus('Rename failed: $e', error: true);
+      return false;
+    } finally {
+      if (mounted && _isRenaming) setState(() => _isRenaming = false);
     }
-    setState(() {
-      _files
-        ..clear()
-        ..addAll(newFiles);
-      _byPath
-        ..clear()
-        ..addAll(newByPath);
-      if (_inputFolder != null) {
-        for (final pair in result.renamedFolders) {
-          if (p.normalize(pair.from) == p.normalize(_inputFolder!)) {
-            final oldInput = _inputFolder!;
-            _inputFolder = pair.to;
-            // Keep auto output under the renamed folder.
-            final autoOld = _autoOutputDirFor(oldInput);
-            if (!_outputPathCustom &&
-                _outputDir != null &&
-                p.normalize(_outputDir!) == p.normalize(autoOld)) {
-              _outputDir = _autoOutputDirFor(pair.to);
-            }
-            break;
-          }
-        }
-      }
-      _isRenaming = false;
-    });
 
     for (final pair in result.renamed) {
       _appendLog('  ${p.basename(pair.from)} -> ${p.basename(pair.to)}');
@@ -442,18 +528,108 @@ class _HomePageState extends State<HomePage> {
     }
     _appendLog('Rename done: ${result.successCount} file(s), '
         '${result.renamedFolders.length} folder(s), ${result.failCount} failed');
-    return result.failCount == 0 || result.successCount > 0;
+
+    final parts = <String>[];
+    if (result.successCount > 0) parts.add('${result.successCount} file(s)');
+    if (result.renamedFolders.isNotEmpty) {
+      parts.add('${result.renamedFolders.length} folder(s)');
+    }
+    if (result.failCount > 0) {
+      _setPanelStatus('Rename finished with ${result.failCount} error(s)'
+          '${parts.isEmpty ? "" : ": ${parts.join(", ")}"}', error: true);
+    } else if (parts.isEmpty) {
+      _setPanelStatus(result.errors.isEmpty ? 'Nothing to rename' : result.errors.first, error: true);
+    } else {
+      _setPanelStatus('Renamed ${parts.join(" and ")}');
+    }
+
+    return result.failCount == 0 || result.successCount > 0 || result.renamedFolders.isNotEmpty;
+  }
+
+  void _applyRenameResult(RenameResult result, {String? renamedFrom}) {
+    final pathMap = <String, String>{
+      for (final pair in result.renamed) pair.from: pair.to,
+    };
+    final newFiles = <FileEntry>[];
+    final newByPath = <String, FileEntry>{};
+    for (final e in _files) {
+      var newPath = pathMap[e.path] ?? e.path;
+      if (result.renamedFolders.isNotEmpty) {
+        newPath = remapPathAfterFolderRenames(newPath, result.renamedFolders);
+      }
+      e.path = newPath;
+      e.name = p.basename(newPath);
+      newFiles.add(e);
+      newByPath[newPath] = e;
+    }
+    String? renamedTo;
+    if (renamedFrom != null) {
+      for (final pair in result.renamedFolders) {
+        if (p.normalize(pair.from) == p.normalize(renamedFrom)) {
+          renamedTo = pair.to;
+          break;
+        }
+      }
+    }
+    setState(() {
+      _files
+        ..clear()
+        ..addAll(newFiles);
+      _byPath
+        ..clear()
+        ..addAll(newByPath);
+      if (renamedTo != null &&
+          _inputFolder != null &&
+          renamedFrom != null &&
+          p.normalize(_inputFolder!) == p.normalize(renamedFrom)) {
+        final oldInput = _inputFolder!;
+        _inputFolder = renamedTo;
+        final autoOld = _autoOutputDirFor(oldInput);
+        if (!_outputPathCustom &&
+            _outputDir != null &&
+            p.normalize(_outputDir!) == p.normalize(autoOld)) {
+          _setOutputDir(_autoOutputDirFor(renamedTo), custom: false);
+        }
+      }
+    });
+  }
+
+  Future<void> _renameNow() async {
+    if (!_canRenameNow) return;
+    if (!await _ensureOutputFolder()) return;
+    await _renameListedFiles();
+  }
+
+  /// Creates the typed output folder if it does not exist yet.
+  /// Returns false only when a path was given and creation failed.
+  Future<bool> _ensureOutputFolder() async {
+    if (kIsWeb) return true;
+    final path = _typedOutputDir;
+    if (path.isEmpty) return true;
+    _outputDir = path;
+    _outputPathCustom = true;
+    if (fs.directoryExistsSync(path)) return true;
+    try {
+      await fs.createDirectory(path);
+      if (mounted) {
+        setState(() {
+          _outputDir = path;
+          _panelStatus = 'Created folder';
+          _panelStatusError = false;
+        });
+      }
+      return true;
+    } catch (e) {
+      _setPanelStatus('Could not create folder: $e', error: true);
+      return false;
+    }
   }
 
   Future<void> _startConversion() async {
     if (_files.isEmpty || _busy) return;
 
     if (!await _ensureAndroidStorage(why: 'convert and save TIFF files')) return;
-
-    if (!kIsWeb && _renameBeforeConvert) {
-      final ok = await _renameListedFiles();
-      if (!ok) return;
-    }
+    if (!await _ensureOutputFolder()) return;
 
     final shouldZipBmps = !kIsWeb && _zipBmpsAfterConvert && _inputFolder != null;
     final bmpPathsForZip = shouldZipBmps ? _files.map((f) => f.path).toList() : const <String>[];
@@ -681,6 +857,7 @@ class _HomePageState extends State<HomePage> {
     _thumbs.dispose();
     _manager?.dispose();
     _renamePrefixCtrl.dispose();
+    _outputDirCtrl.dispose();
     super.dispose();
   }
 
@@ -725,19 +902,6 @@ class _HomePageState extends State<HomePage> {
                       ],
                     ),
                   ),
-                  if (_inputFolder != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: AppTheme.panel,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: Text(
-                        'Folder: ${p.basename(_inputFolder!)}',
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                      ),
-                    ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -746,34 +910,69 @@ class _HomePageState extends State<HomePage> {
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final narrow = constraints.maxWidth < 720 || isMobile;
-                    final files = _buildFilesPanel(totalSize);
-                    final settings = SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _buildOptionsPanel(),
+                    // Phones: stack all panels at natural height inside a single
+                    // page-level scroll. Text stays full size (no scale-down),
+                    // no panel grows an inner scrollbar, and the header plus
+                    // action bar stay pinned above/below.
+                    if (isMobile) {
+                      final filesHeight = MediaQuery.sizeOf(context).height * 0.45;
+                      return SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildInputPanel(totalSize),
+                            const SizedBox(height: 10),
+                            _buildOptionsPanel(),
+                            const SizedBox(height: 10),
+                            _buildRenamePanel(),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: filesHeight,
+                              child: _buildFilesPanel(totalSize),
+                            ),
+                            const SizedBox(height: 10),
+                            _buildOutputPanel(),
+                          ],
+                        ),
+                      );
+                    }
+                    final narrow = constraints.maxWidth < 720;
+                    final left = Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: _buildInputPanel(totalSize)),
+                        const SizedBox(height: 10),
+                        Expanded(child: _buildOptionsPanel()),
+                        if (!kIsWeb) ...[
                           const SizedBox(height: 10),
-                          _buildOutputPanel(),
+                          Expanded(child: _buildRenamePanel()),
                         ],
-                      ),
+                      ],
+                    );
+                    final right = Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: _buildFilesPanel(totalSize)),
+                        const SizedBox(height: 10),
+                        _buildOutputPanel(),
+                      ],
                     );
                     if (narrow) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Expanded(flex: 5, child: files),
+                          Expanded(flex: 6, child: left),
                           const SizedBox(height: 10),
-                          Expanded(flex: 6, child: settings),
+                          Expanded(flex: 5, child: right),
                         ],
                       );
                     }
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(flex: 5, child: files),
+                        Expanded(flex: 4, child: left),
                         const SizedBox(width: 12),
-                        Expanded(flex: 4, child: settings),
+                        Expanded(flex: 6, child: right),
                       ],
                     );
                   },
@@ -808,9 +1007,7 @@ class _HomePageState extends State<HomePage> {
                 child: FilledButton.icon(
                   onPressed: _canStart ? _startConversion : null,
                   icon: Icon(_busy ? Icons.hourglass_top : Icons.play_arrow, size: 20),
-                  label: Text(_isRenaming
-                      ? 'Renaming...'
-                      : _jobPhase == 'archiving'
+                  label: Text(_jobPhase == 'archiving'
                           ? 'Archiving BMPs...'
                           : _jobPhase == 'deleting'
                               ? 'Deleting BMPs...'
@@ -844,15 +1041,36 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Shrinks panel content to fit the available slot. Does not scroll or upscale.
+  /// Mobile uses natural panel heights inside a page-level scroll, so no scaling.
+  Widget _fitPanel(Widget child) {
+    if (isMobile) return child;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: constraints.maxWidth,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildOptionsPanel() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      alignment: Alignment.topLeft,
       decoration: BoxDecoration(
         color: AppTheme.panel,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.border),
       ),
-      child: Column(
+      child: _fitPanel(
+      Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('Convert', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
@@ -909,7 +1127,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 SizedBox(
-                  width: 28,
+                  width: 34,
                   child: Text('${_jpegQuality.round()}', style: const TextStyle(color: AppTheme.accent, fontSize: 13)),
                 ),
               ],
@@ -930,22 +1148,54 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 SizedBox(
-                  width: 28,
+                  width: 34,
                   child: Text('$_threads', style: const TextStyle(color: AppTheme.accent, fontSize: 13)),
                 ),
               ],
             ),
         ],
       ),
+      ),
     );
   }
 
   Widget _buildOutputPanel() {
-    final previewPrefix = sanitizePrefix(_renamePrefixCtrl.text);
-    final preview = previewPrefix.isEmpty
-        ? 'prefix_001.ext'
-        : (_renameFolderToo ? '$previewPrefix/${previewPrefix}_001.ext' : '${previewPrefix}_001.ext');
     final zipEnabled = !_busy && _inputFolder != null;
+
+    // Shared by desktop (inline row) and mobile (stacked) layouts below.
+    final dirField = TextField(
+      controller: _outputDirCtrl,
+      enabled: !_busy,
+      onChanged: (v) {
+        _outputPathCustom = true;
+        _outputDir = v.trim().isEmpty ? null : v.trim();
+        setState(() {});
+      },
+      decoration: InputDecoration(
+        isDense: true,
+        labelText: 'Output folder',
+        hintText: isMobile ? 'Choose or type a folder path' : r'C:\Photos\out',
+        suffix: _outputPathSuffix(),
+      ),
+      style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+    );
+    final dirButtons = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton(
+          onPressed: _busy ? null : _pickOutputDir,
+          child: const Text('Change'),
+        ),
+        OutlinedButton.icon(
+          onPressed: _busy || kIsWeb || _typedOutputDir.isEmpty
+              ? null
+              : _showOutputFolder,
+          icon: const Icon(Icons.folder_open, size: 16),
+          label: const Text('Show folder'),
+        ),
+      ],
+    );
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
@@ -957,7 +1207,25 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Output', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              const Text('Output', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _panelStatus.isEmpty
+                    ? const SizedBox.shrink()
+                    : Text(
+                        _panelStatus,
+                        textAlign: TextAlign.right,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _panelStatusError ? AppTheme.danger : AppTheme.success,
+                          fontSize: 12,
+                        ),
+                      ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           if (kIsWeb) ...[
             const Text(
@@ -977,71 +1245,92 @@ class _HomePageState extends State<HomePage> {
               style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
             ),
           ] else ...[
-          Row(
-            children: [
-              const Text(
-                'Output folder:',
-                style: TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+            if (isMobile) ...[
+              dirField,
+              const SizedBox(height: 8),
+              dirButtons,
+            ] else
+              Row(
+                children: [
+                  Expanded(child: dirField),
+                  const SizedBox(width: 8),
+                  dirButtons,
+                ],
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppTheme.surfaceInput,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppTheme.border),
-                  ),
-                  child: Text(
-                    _outputDir ?? '',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _outputDir == null ? AppTheme.textMuted : AppTheme.textPrimary,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _busy ? null : _pickOutputDir,
-                child: const Text('Change'),
-              ),
-            ],
-          ),
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
             children: [
-              Checkbox(
-                value: _independentOutputFolder,
-                visualDensity: VisualDensity.compact,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                onChanged: _busy
-                    ? null
-                    : (v) => setState(() {
-                          _independentOutputFolder = v ?? false;
-                          _outputPathCustom = false;
-                          _syncAutoOutputDir();
-                        }),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
+                    value: _independentOutputFolder,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    onChanged: _busy
+                        ? null
+                        : (v) => setState(() {
+                              _independentOutputFolder = v ?? false;
+                              _outputPathCustom = false;
+                              _syncAutoOutputDir();
+                            }),
+                  ),
+                  const Text(
+                    'Independent folder',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ],
               ),
-              const SizedBox(width: 4),
-              const Text(
-                'Independent folder',
-                style: TextStyle(color: Colors.white, fontSize: 13),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _independentOutputFolder
-                      ? '→ ${_defaultOutputFolderName()}'
-                      : '→ same as input folder',
-                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
+              Opacity(
+                opacity: zipEnabled ? 1 : 0.45,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Checkbox(
+                      value: _zipBmpsAfterConvert,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: zipEnabled
+                          ? (v) => setState(() => _zipBmpsAfterConvert = v ?? false)
+                          : null,
+                    ),
+                    const Text(
+                      'Archive BMPs',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRenamePanel() {
+    final previewPrefix = sanitizePrefix(_renamePrefixCtrl.text);
+    final preview = previewPrefix.isEmpty
+        ? 'prefix_001.ext'
+        : (_renameFolderToo ? '$previewPrefix/${previewPrefix}_001.ext' : '${previewPrefix}_001.ext');
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      alignment: Alignment.topLeft,
+      decoration: BoxDecoration(
+        color: AppTheme.panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: _fitPanel(
+        Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           const Text('Rename', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           TextField(
@@ -1056,25 +1345,26 @@ class _HomePageState extends State<HomePage> {
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
           ),
           const SizedBox(height: 8),
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            runSpacing: 4,
             children: [
               const Text(
-                'Rename Target:',
+                'Rename target:',
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(width: 4),
               Checkbox(
-                value: _renameBeforeConvert,
+                value: _renameImages,
                 visualDensity: VisualDensity.compact,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                onChanged: _busy ? null : (v) => setState(() => _renameBeforeConvert = v ?? false),
+                onChanged: _busy ? null : (v) => setState(() => _renameImages = v ?? false),
               ),
               const Text('Images', style: TextStyle(color: AppTheme.textPrimary, fontSize: 12)),
-              const SizedBox(width: 8),
               Checkbox(
                 value: _renameFolderToo,
                 visualDensity: VisualDensity.compact,
@@ -1082,42 +1372,80 @@ class _HomePageState extends State<HomePage> {
                 onChanged: _busy ? null : (v) => setState(() => _renameFolderToo = v ?? false),
               ),
               const Text('Folder', style: TextStyle(color: AppTheme.textPrimary, fontSize: 12)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  preview,
-                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.right,
-                ),
-              ),
             ],
           ),
+          const SizedBox(height: 4),
+          Text(
+            preview,
+            style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
+            overflow: TextOverflow.ellipsis,
+          ),
           const SizedBox(height: 8),
-          Opacity(
-            opacity: zipEnabled ? 1 : 0.45,
-            child: Row(
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.tonalIcon(
+              onPressed: _canRenameNow ? _renameNow : null,
+              icon: Icon(_isRenaming ? Icons.hourglass_top : Icons.drive_file_rename_outline, size: 18),
+              label: Text(_isRenaming ? 'Renaming...' : 'Rename Only'),
+            ),
+          ),
+        ],
+      ),
+      ),
+    );
+  }
+
+  Widget? _outputPathSuffix() {
+    if (kIsWeb) return null;
+    if (_outputFolderExists) {
+      return const Padding(
+        padding: EdgeInsets.only(right: 8),
+        child: Icon(Icons.check_circle, color: AppTheme.success, size: 18),
+      );
+    }
+    if (_outputFolderNeedsCreate) {
+      const yellow = Color(0xFFFFE14D);
+      const outline = Color(0xFF3D3200);
+      return GestureDetector(
+        onTap: _busy ? null : () { _ensureOutputFolder(); },
+        child: Opacity(
+          opacity: _busy ? 0.5 : 1,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: yellow,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Stack(
               children: [
-                Checkbox(
-                  value: _zipBmpsAfterConvert,
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  onChanged: zipEnabled
-                      ? (v) => setState(() => _zipBmpsAfterConvert = v ?? false)
-                      : null,
+                Text(
+                  'create',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    foreground: Paint()
+                      ..style = PaintingStyle.stroke
+                      ..strokeWidth = 1.4
+                      ..color = outline,
+                  ),
                 ),
-                const SizedBox(width: 4),
                 const Text(
-                  'Archive BMPs',
-                  style: TextStyle(color: Colors.white, fontSize: 13),
+                  'create',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    color: Colors.transparent,
+                  ),
                 ),
               ],
             ),
           ),
-          ],
-        ],
-      ),
-    );
+        ),
+      );
+    }
+    return null;
   }
 
   Widget _radioGroup<T>({
@@ -1215,6 +1543,74 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildInputPanel(int totalSize) {
+    final hasInput = _inputFolder != null || _files.isNotEmpty;
+    final summary = _inputFolder != null
+        ? _inputFolder!
+        : (_files.isEmpty
+            ? 'No files or folder selected'
+            : '${_files.length} BMP file(s)${totalSize > 0 ? ", ${_fmtSize(totalSize)}" : ""}');
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      alignment: Alignment.topLeft,
+      decoration: BoxDecoration(
+        color: AppTheme.panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: _fitPanel(
+        Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Input', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceInput,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Text(
+              summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: hasInput ? AppTheme.textPrimary : AppTheme.textMuted,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _pickFiles,
+                icon: const Icon(Icons.insert_drive_file_outlined, size: 16),
+                label: const Text('BMP files'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _pickFolder,
+                icon: const Icon(Icons.folder_open_outlined, size: 16),
+                label: const Text('Folder'),
+              ),
+              if (hasInput)
+                OutlinedButton(
+                  onPressed: _busy ? null : _clearFiles,
+                  child: const Text('Clear'),
+                ),
+            ],
+          ),
+        ],
+      ),
+      ),
+    );
+  }
+
   Widget _buildFilesPanel(int totalSize) {
     final panel = Container(
         decoration: BoxDecoration(
@@ -1243,46 +1639,9 @@ class _HomePageState extends State<HomePage> {
                       style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Add files',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    onPressed: _busy ? null : _pickFiles,
-                    icon: const Icon(Icons.insert_drive_file_outlined, size: 18),
-                  ),
-                  IconButton(
-                    tooltip: 'Add folder',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    onPressed: _busy ? null : _pickFolder,
-                    icon: const Icon(Icons.folder_open_outlined, size: 18),
-                  ),
-                  const SizedBox(width: 4),
-                  OutlinedButton(
-                    onPressed: _busy || _files.isEmpty ? null : _clearFiles,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      minimumSize: const Size(0, 32),
-                      visualDensity: VisualDensity.compact,
-                      textStyle: const TextStyle(fontSize: 12),
-                    ),
-                    child: const Text('Clear files'),
-                  ),
                 ],
               ),
             ),
-            if (_inputFolder != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                child: Text(
-                  _inputFolder!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppTheme.textDim, fontSize: 10),
-                ),
-              ),
             const Divider(height: 1),
             Expanded(
               child: _files.isEmpty
@@ -1302,7 +1661,7 @@ class _HomePageState extends State<HomePage> {
                               const SizedBox(height: 8),
                               Text(
                                 isMobile
-                                    ? 'Tap to add a BMP folder'
+                                    ? 'Use Input above to add BMP files or a folder'
                                     : 'Drop BMP files / folder here',
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
@@ -1310,8 +1669,8 @@ class _HomePageState extends State<HomePage> {
                               const SizedBox(height: 4),
                               Text(
                                 isMobile
-                                    ? 'or use the file / folder buttons above'
-                                    : 'or use the buttons above',
+                                    ? 'or tap here to pick a folder'
+                                    : 'or use Input above',
                                 style: const TextStyle(color: AppTheme.textDim, fontSize: 11),
                               ),
                             ],

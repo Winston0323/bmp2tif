@@ -48,6 +48,7 @@ app.*.map.json
 /test_assets/
 /test_output/
 /test_output_manager/
+/dist/
 *.png
 !web/**/*.png
 !windows/runner/resources/**
