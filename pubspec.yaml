@@ -35,7 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   image: ^4.9.1
-  file_picker: ^11.0.2
+  file_picker: '>=11.0.2 <14.0.0'
   desktop_drop: ^0.7.1
   path: ^1.9.1
   archive: ^4.0.9
